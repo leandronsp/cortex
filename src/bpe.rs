@@ -33,8 +33,7 @@ impl Bpe {
         merge::merge(tokens, pair, new_token)
     }
 
-    // It's not a training itself, it's just building a "vocabulary" on top of input tokens
-    pub fn train(&mut self, tokens: &[u16], num_merges: usize) -> Vec<u16> {
+    pub fn build_vocab(&mut self, tokens: &[u16], num_merges: usize) -> Vec<u16> {
         let mut next_token = 256;
         let mut result = tokens.to_vec();
 
