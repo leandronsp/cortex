@@ -1,3 +1,4 @@
+mod bigram;
 mod bpe;
 mod embedding;
 mod merge;
@@ -14,7 +15,7 @@ fn main() {
     println!("Encoded: {:?} ({} tokens)", tokens, tokens.len());
 
     for n in 1..=21 {
-        let trained = bpe.train(&tokens, n); // build vocabulary
+        let trained = bpe.build_vocab(&tokens, n);
         println!(
             "After {:2} merges: {:?} ({} tokens)",
             n,
