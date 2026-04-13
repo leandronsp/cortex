@@ -6,6 +6,10 @@ pub fn softmax(logits: &[f32]) -> Vec<f32> {
     exp_logits.iter().map(|&x| x / sum_exp_logits).collect()
 }
 
+pub fn cross_entropy_loss(predicted: &[f32], target_index: usize) -> f32 {
+    -predicted[target_index].ln()
+}
+
 #[cfg(test)]
 #[path = "calc_test.rs"]
 mod tests;

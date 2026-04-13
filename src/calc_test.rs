@@ -12,3 +12,16 @@ fn test_softmax_logits_into_probabilities() {
         assert!((p - e).abs() < 1e-6_f32);
     }
 }
+
+#[test]
+fn test_cross_entropy_loss() {
+    let predicted = vec![0.7, 0.2, 0.1];
+
+    let mut loss = cross_entropy_loss(&predicted, 0);
+
+    assert!((loss - 0.35667494).abs() < 1e-6_f32);
+
+    loss = cross_entropy_loss(&predicted, 1);
+
+    assert!((loss - 1.6094379).abs() < 1e-6_f32);
+}
