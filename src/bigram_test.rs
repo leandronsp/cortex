@@ -43,3 +43,21 @@ fn test_forward_logits_into_probabilities() {
     // [1.0, 0.0, 2.0] means the order of probabilities should be 2.0 > 1.0 > 0.0
     assert!(probs[2] > probs[0] && probs[2] > probs[1] && probs[0] > probs[1]);
 }
+
+#[test]
+fn test_pipeline_forward_loss() {
+    let mut bigram = Bigram::new(3);
+
+    bigram.set_weights(vec![
+        vec![2.0, 1.0, 0.0],
+        vec![0.0, 0.0, 0.0],
+        vec![1.0, 0.0, 2.0],
+    ]);
+
+    let logits = bigram.forward(0);
+    let probs = crate::calc::softmax(&logits);
+    let loss = crate::calc::cross_entropy_loss(&probs, 0);
+
+    // The correct class is index 0 with a probability of ~0.6652409, so the loss should be around -ln(0.6652409) ≈ 0.40760596
+    assert!((loss - 0.40760596).abs() < 1e-6_f32);
+}
