@@ -1,4 +1,5 @@
 use super::*;
+use crate::bpe::Bpe;
 
 #[test]
 fn test_given_a_token_id_returns_its_logits() {
@@ -60,4 +61,73 @@ fn test_pipeline_forward_loss() {
 
     // The correct class is index 0 with a probability of ~0.6652409, so the loss should be around -ln(0.6652409) ≈ 0.40760596
     assert!((loss - 0.40760596).abs() < 1e-6_f32);
+}
+
+#[test]
+pub fn test_update_adjust_weights_for_token_row() {
+    let mut bigram = Bigram::new(3);
+
+    bigram.set_weights(vec![
+        vec![0.5, 0.5, 0.5],
+        vec![0.1, 0.2, 0.3],
+        vec![0.9, 0.9, 0.9],
+    ]);
+
+    let gradient = vec![-0.3, 0.2, 0.1]; // Example gradient for token_id 0
+
+    bigram.update(0, &gradient, 0.1);
+
+    let updated = bigram.forward(0);
+
+    assert!((updated[0] - 0.53).abs() < 1e-6_f32);
+    assert!((updated[1] - 0.48).abs() < 1e-6_f32);
+    assert!((updated[2] - 0.49).abs() < 1e-6_f32);
+
+    assert_eq!(bigram.forward(1), vec![0.1, 0.2, 0.3]);
+    assert_eq!(bigram.forward(2), vec![0.9, 0.9, 0.9]);
+}
+
+#[test]
+fn test_train_then_predict_next_token() {
+    let text = "ababab";
+    let bpe = Bpe::new();
+    let tokens = bpe.encode(text);
+    // tokens: [97, 98, 97, 98, 97, 98]  ('a' = 97, 'b' = 98)
+
+    let vocab_size = 256u16; // cover all possible bytes
+    let mut bigram = Bigram::new(vocab_size);
+
+    // Train: walk consecutive pairs, update weights
+    let learning_rate = 1.0;
+    let epochs = 100;
+
+    for _ in 0..epochs {
+        for window in tokens.windows(2) {
+            let input = window[0];
+            let target = window[1] as usize;
+
+            let logits = bigram.forward(input);
+            let probs = crate::calc::softmax(&logits);
+            let gradient = crate::calc::cross_entropy_gradient(&probs, target);
+            bigram.update(input, &gradient, learning_rate);
+        }
+    }
+
+    // Predict: after 'a' (97), model should say 'b' (98)
+    let probs = crate::calc::softmax(&bigram.forward(97));
+    let predicted = argmax(&probs);
+    assert_eq!(predicted, 98);
+
+    // After 'b' (98), model should say 'a' (97)
+    let probs = crate::calc::softmax(&bigram.forward(98));
+    let predicted = argmax(&probs);
+    assert_eq!(predicted, 97);
+}
+
+fn argmax(v: &[f32]) -> usize {
+    v.iter()
+        .enumerate()
+        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+        .map(|(i, _)| i)
+        .unwrap()
 }
