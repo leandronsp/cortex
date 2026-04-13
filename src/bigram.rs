@@ -18,6 +18,12 @@ impl Bigram {
     pub fn set_weights(&mut self, weights: Vec<Vec<f32>>) {
         self.weights = weights;
     }
+
+    pub fn update(&mut self, token_id: u16, gradient: &[f32], learning_rate: f32) {
+        for i in 0..self.vocab_size as usize {
+            self.weights[token_id as usize][i] -= learning_rate * gradient[i];
+        }
+    }
 }
 
 #[cfg(test)]
