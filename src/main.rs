@@ -30,14 +30,20 @@ fn main() {
     let learning_rate = 1.0;
     let epochs = 200;
 
-    for _ in 0..epochs {
+    for epoch in 0..epochs {
+        let mut total_loss = 0.0;
         for window in tokens.windows(2) {
             let input = window[0];
             let target = window[1] as usize;
             let logits = bigram.forward(input);
             let probs = calc::softmax(&logits);
+            total_loss += calc::cross_entropy_loss(&probs, target);
             let gradient = calc::cross_entropy_gradient(&probs, target);
             bigram.update(input, &gradient, learning_rate);
+        }
+        if epoch % 20 == 0 {
+            let avg_loss = total_loss / (tokens.len() - 1) as f32;
+            println!("Epoch {:3}: avg loss = {:.4}", epoch, avg_loss);
         }
     }
 
