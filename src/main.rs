@@ -1,5 +1,6 @@
 mod bigram;
 mod bpe;
+mod calc;
 mod embedding;
 mod merge;
 mod pairs;
