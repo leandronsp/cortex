@@ -3,9 +3,9 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::process::ExitCode;
 
-use cortex::config::Config;
-use cortex::registry::create_model;
 use cortex::Cortex;
+use cortex::config::Config;
+use cortex::model::registry::create_model;
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();

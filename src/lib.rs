@@ -1,12 +1,7 @@
-pub mod bigram;
-pub mod bpe;
-pub mod calc;
 pub mod config;
-pub mod cortex;
-pub mod merge;
 pub mod model;
-pub mod pairs;
-pub mod registry;
-pub mod tokenizer;
+pub mod tokenization;
+pub mod training;
+pub mod tui;
 
-pub use cortex::Cortex;
+pub use training::Cortex;
