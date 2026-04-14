@@ -33,6 +33,14 @@ impl Bpe {
         merge::merge(tokens, pair, new_token)
     }
 
+    pub fn merges(&self) -> &[((u16, u16), u16)] {
+        &self.merges
+    }
+
+    pub fn set_merges(&mut self, merges: Vec<((u16, u16), u16)>) {
+        self.merges = merges;
+    }
+
     pub fn build_vocab(&mut self, tokens: &[u16], num_merges: usize) -> Vec<u16> {
         let mut next_token = 256;
         let mut result = tokens.to_vec();

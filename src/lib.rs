@@ -1,6 +1,8 @@
 pub mod bigram;
 pub mod bpe;
 pub mod calc;
+pub mod cortex;
+pub use cortex::Cortex;
 pub mod merge;
 pub mod model;
 pub mod pairs;
