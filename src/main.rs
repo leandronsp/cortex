@@ -1,17 +1,8 @@
-#![allow(dead_code)]
-
-mod bigram;
-mod bpe;
-mod calc;
-mod embedding;
-mod merge;
-mod pairs;
-mod tokenizer;
-
 use std::io::{self, BufRead, Write};
 
-use bigram::Bigram;
-use bpe::Bpe;
+use cortex::bigram::Bigram;
+use cortex::bpe::Bpe;
+use cortex::calc;
 
 fn main() {
     let stdin = io::stdin();
