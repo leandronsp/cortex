@@ -15,7 +15,7 @@ learning_rate = 1.0
 [weights]
 path = "target/bigram.bin"
 "#;
-    let cfg = Config::from_str(input).unwrap();
+    let cfg = Config::parse(input).unwrap();
     assert_eq!(cfg.model.name, "bigram");
     assert_eq!(cfg.model.vocab_size, 256);
     assert_eq!(cfg.training.corpus, "data/corpus.txt");
@@ -27,7 +27,7 @@ path = "target/bigram.bin"
 #[test]
 fn malformed_toml_returns_error_with_message() {
     let input = "this is = not = valid toml [[[";
-    let err = Config::from_str(input).unwrap_err();
+    let err = Config::parse(input).unwrap_err();
     assert!(!err.is_empty());
 }
 
@@ -37,7 +37,7 @@ fn missing_required_field_returns_error() {
 [model]
 name = "bigram"
 "#;
-    let err = Config::from_str(input).unwrap_err();
+    let err = Config::parse(input).unwrap_err();
     assert!(err.contains("vocab_size") || err.contains("training") || err.contains("missing"));
 }
 

@@ -1,0 +1,11 @@
+[model]
+name = "bigram"
+vocab_size = 256
+
+[training]
+corpus = "configs/corpus.txt"
+epochs = 200
+learning_rate = 1.0
+
+[weights]
+path = "target/bigram.weights"

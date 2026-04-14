@@ -28,7 +28,7 @@ pub struct WeightsSection {
 }
 
 impl Config {
-    pub fn from_str(input: &str) -> Result<Self, String> {
+    pub fn parse(input: &str) -> Result<Self, String> {
         toml::from_str(input).map_err(|e| e.to_string())
     }
 
@@ -36,7 +36,7 @@ impl Config {
         let path_ref = path.as_ref();
         let bytes = std::fs::read_to_string(path_ref)
             .map_err(|e| format!("failed to read config {}: {}", path_ref.display(), e))?;
-        Self::from_str(&bytes)
+        Self::parse(&bytes)
     }
 }
 

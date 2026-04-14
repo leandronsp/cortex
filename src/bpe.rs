@@ -6,6 +6,12 @@ pub struct Bpe {
     merges: Vec<((u16, u16), u16)>,
 }
 
+impl Default for Bpe {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Bpe {
     pub fn new() -> Self {
         Self { merges: Vec::new() }

@@ -109,20 +109,20 @@ fn event_loop<B: ratatui::backend::Backend>(
 ) -> io::Result<()> {
     while !app.quit {
         terminal.draw(|f| render(f, app))?;
-        if event::poll(std::time::Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press {
-                    continue;
+        if event::poll(std::time::Duration::from_millis(100))?
+            && let Event::Key(key) = event::read()?
+        {
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
+            match key.code {
+                KeyCode::Esc => app.quit = true,
+                KeyCode::Enter => submit(app),
+                KeyCode::Backspace => {
+                    app.input.pop();
                 }
-                match key.code {
-                    KeyCode::Esc => app.quit = true,
-                    KeyCode::Enter => submit(app),
-                    KeyCode::Backspace => {
-                        app.input.pop();
-                    }
-                    KeyCode::Char(c) => app.input.push(c),
-                    _ => {}
-                }
+                KeyCode::Char(c) => app.input.push(c),
+                _ => {}
             }
         }
     }

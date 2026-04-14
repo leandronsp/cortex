@@ -25,8 +25,9 @@ impl Bigram {
     }
 
     pub fn update(&mut self, token_id: u16, gradient: &[f32], learning_rate: f32) {
-        for i in 0..self.vocab_size as usize {
-            self.weights[token_id as usize][i] -= learning_rate * gradient[i];
+        let row = &mut self.weights[token_id as usize];
+        for (w, g) in row.iter_mut().zip(gradient.iter()) {
+            *w -= learning_rate * g;
         }
     }
 }
