@@ -23,6 +23,10 @@ pub fn relu(x: f32) -> f32 {
     x.max(0.0)
 }
 
+pub fn relu_vec(input: &[f32]) -> Vec<f32> {
+    input.iter().map(|&x| relu(x)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,5 +82,13 @@ mod tests {
     fn test_relu_returns_input_for_positive() {
         assert_eq!(relu(0.0), 0.0);
         assert_eq!(relu(3.5), 3.5);
+    }
+
+    #[test]
+    fn test_relu_vec_zeros_negatives_and_keeps_positives() {
+        let input = vec![-2.0, 0.0, 3.0, -0.5, 1.5];
+        let output = relu_vec(&input);
+
+        assert_eq!(output, vec![0.0, 0.0, 3.0, 0.0, 1.5]);
     }
 }
