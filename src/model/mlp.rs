@@ -29,9 +29,7 @@ impl Mlp {
         Self {
             config,
             embedding: vec![vec![0.0; embedding_dim]; vs],
-            hidden_layers: vec![
-                Layer::new(input_size, hidden_dim, Activation::ReLU),
-            ],
+            hidden_layers: vec![Layer::new(input_size, hidden_dim, Activation::ReLU)],
             output_layer: Layer::new(hidden_dim, vs, Activation::None),
         }
     }
@@ -106,4 +104,3 @@ mod tests {
         assert_eq!(logits, vec![2.0, 0.0, 0.0, 0.0]);
     }
 }
-

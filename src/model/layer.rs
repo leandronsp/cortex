@@ -1,3 +1,5 @@
+use crate::training::calc;
+
 pub enum Activation {
     ReLU,
     None,
@@ -17,7 +19,8 @@ impl Layer {
     }
 
     pub fn forward(&self, input: &[f32]) -> Vec<f32> {
-        let raw: Vec<f32> = self.weights
+        let raw: Vec<f32> = self
+            .weights
             .iter()
             .map(|neurons| {
                 neurons
@@ -29,7 +32,7 @@ impl Layer {
             .collect();
 
         match self.activation {
-            Activation::ReLU => raw.iter().map(|&x| x.max(0.0)).collect(),
+            Activation::ReLU => calc::relu_vec(&raw),
             Activation::None => raw,
         }
     }
