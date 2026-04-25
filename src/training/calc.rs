@@ -1,6 +1,9 @@
 pub fn softmax(logits: &[f32]) -> Vec<f32> {
     let max_logit = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+
+    // Expoente da diferença do logit pro max_logit
     let exp_logits: Vec<f32> = logits.iter().map(|&x| (x - max_logit).exp()).collect();
+
     let sum_exp_logits: f32 = exp_logits.iter().sum();
 
     exp_logits.iter().map(|&x| x / sum_exp_logits).collect()
@@ -14,6 +17,10 @@ pub fn cross_entropy_gradient(probs: &[f32], target_index: usize) -> Vec<f32> {
     let mut gradient = probs.to_vec();
     gradient[target_index] -= 1.0; // For the correct class, subtract 1 from the probability
     gradient
+}
+
+pub fn relu(x: f32) -> f32 {
+    x.max(0.0)
 }
 
 #[cfg(test)]
@@ -59,5 +66,17 @@ mod tests {
         for (g, e) in gradient.iter().zip(expected.iter()) {
             assert!((g - e).abs() < 1e-6_f32);
         }
+    }
+
+    #[test]
+    fn test_relu_returns_zero_for_negative() {
+        assert_eq!(relu(-2.0), 0.0);
+        assert_eq!(relu(-0.5), 0.0);
+    }
+
+    #[test]
+    fn test_relu_returns_input_for_positive() {
+        assert_eq!(relu(0.0), 0.0);
+        assert_eq!(relu(3.5), 3.5);
     }
 }
