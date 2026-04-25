@@ -37,6 +37,10 @@ impl Model for Bigram {
         self.vocab_size
     }
 
+    fn context_size(&self) -> usize {
+        1
+    }
+
     fn forward(&self, context: &[u16]) -> Vec<f32> {
         let last = *context.last().expect("context must not be empty");
         Bigram::forward(self, last)

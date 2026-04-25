@@ -1,6 +1,5 @@
 use std::io::{Read, Write};
 
-use super::calc;
 use crate::model::Model;
 use crate::tokenization::Bpe;
 
@@ -56,8 +55,7 @@ impl Cortex {
         let mut produced: Vec<u8> = Vec::new();
         for _ in 0..max_tokens {
             let logits = self.model.forward(&context);
-            let probs = calc::softmax(&logits);
-            let next = argmax(&probs) as u16;
+            let next = argmax(&logits) as u16;
             let byte = next as u8;
             produced.push(byte);
             context.push(next);
