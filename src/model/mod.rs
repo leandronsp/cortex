@@ -2,6 +2,7 @@ use std::io::{Read, Write};
 
 pub mod bigram;
 pub mod layer;
+pub mod mlp;
 pub mod registry;
 
 pub trait Model {
