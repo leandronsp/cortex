@@ -17,18 +17,18 @@ fn attention_trains_end_to_end_and_generates() {
     // The MLP (window 3) saw only "the " here and wrongly continued with
     // "question". Attention (window 8) can look back to "over the" and should
     // stay on the dog sentence.
-    let out = cortex.generate("the quick brown fox jumps over the", 12);
+    let out = cortex.generate("the quick brown fox jumps over the", 12, 1, 1.0);
     assert_eq!(out, " lazy dog\n");
 
     // Short prompts used to be left-padded with the unseen token 0, which made
     // the model hallucinate. With BOS padding the model should continue from
     // the prompt using a learned start-of-sequence signal.
-    let lazy_out = cortex.generate("lazy", 12);
+    let lazy_out = cortex.generate("lazy", 12, 1, 1.0);
     assert_eq!(lazy_out, " dog\n");
 
-    // The corpus now has a Shakespeare line. A two-word prompt should give
+    // The corpus now has a Shakespeare paragraph. A two-word prompt should give
     // enough context to stay on that sentence.
-    let shakespeare_out = cortex.generate("all the", 30);
+    let shakespeare_out = cortex.generate("all the", 30, 1, 1.0);
     assert!(
         shakespeare_out.contains("players") || shakespeare_out.contains("men and women"),
         "should continue the shakespeare line, got {shakespeare_out:?}"

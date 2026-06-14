@@ -16,6 +16,6 @@ fn mlp_trains_end_to_end_and_generates() {
     // The pipeline learns: loss drops from the uniform baseline.
     assert!(report.last_avg_loss < report.first_avg_loss);
 
-    let out = cortex.generate("the ", 40);
+    let out = cortex.generate("the ", 40, 1, 1.0);
     assert!(!out.is_empty());
 }

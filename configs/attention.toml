@@ -7,8 +7,12 @@ hidden_dim = 256
 
 [training]
 corpus = "configs/corpus.txt"
-epochs = 600
+epochs = 400
 learning_rate = 0.02
+
+[sampling]
+top_k = 5
+temperature = 1.0
 
 [weights]
 path = "target/attention.weights"
