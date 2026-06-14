@@ -2,7 +2,12 @@ use cortex::config::Config;
 use cortex::model::registry::create_model;
 use cortex::Cortex;
 
+// Slow end-to-end smoke: trains 200 epochs of the attention model and checks
+// exact generation. Costs ~250s in debug, ~30s in release. Excluded from the
+// default `make test` so the RED-GREEN loop stays fast. Run on demand via
+// `make test-slow` (release mode) or `cargo test --release -- --ignored`.
 #[test]
+#[ignore = "slow e2e: ~250s debug / ~30s release. Run with: make test-slow"]
 fn attention_trains_end_to_end_and_generates() {
     let config = Config::from_path("configs/attention.toml").expect("config");
     let model = create_model(&config.model).expect("model");

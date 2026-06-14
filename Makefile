@@ -12,5 +12,8 @@ build: ## Build library and binaries
 lint: ## Run clippy with warnings as errors
 	@cargo clippy -- -D warnings
 
-test: ## Run all tests
+test: ## Run fast tests (skips #[ignore] slow e2e)
 	@cargo test
+
+test-slow: ## Run slow e2e tests in release mode (uses #[ignore] markers)
+	@cargo test --release -- --ignored

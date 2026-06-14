@@ -36,18 +36,63 @@ pub struct AttentionConfig {
     pub context_size: usize,
     pub embedding_dim: usize,
     pub ffn_hidden: usize,
+    pub num_blocks: usize,
+}
+
+impl Default for AttentionConfig {
+    fn default() -> Self {
+        // Sensible defaults for ad-hoc tests; production comes from the TOML
+        // registry path which always supplies all fields.
+        Self {
+            vocab_size: 0,
+            context_size: 0,
+            embedding_dim: 0,
+            ffn_hidden: 0,
+            num_blocks: 1,
+        }
+    }
+}
+
+/// One transformer block: causal self-attention + FFN + residuals. Stacking N
+/// blocks in sequence (with the same residual pattern each time) is what gives
+/// a transformer depth. The output projection `wo` lives on `Attention`, not on
+/// the block, so the last block feeds directly into the vocab logits.
+#[derive(Clone)]
+pub struct Block {
+    pub wq: Vec<Vec<f32>>,
+    pub wk: Vec<Vec<f32>>,
+    pub wv: Vec<Vec<f32>>,
+    pub w1: Vec<Vec<f32>>,
+    pub w2: Vec<Vec<f32>>,
+}
+
+impl Block {
+    pub fn new(d: usize, f: usize) -> Self {
+        Self {
+            wq: vec![vec![0.0; d]; d],
+            wk: vec![vec![0.0; d]; d],
+            wv: vec![vec![0.0; d]; d],
+            w1: vec![vec![0.0; d]; f],
+            w2: vec![vec![0.0; f]; d],
+        }
+    }
+
+    pub fn init_weights(&mut self, rng: &mut calc::Rng) {
+        const RANGE: f32 = 0.1;
+        calc::fill_uniform(&mut self.wq, RANGE, rng);
+        calc::fill_uniform(&mut self.wk, RANGE, rng);
+        calc::fill_uniform(&mut self.wv, RANGE, rng);
+        calc::fill_uniform(&mut self.w1, RANGE, rng);
+        calc::fill_uniform(&mut self.w2, RANGE, rng);
+    }
 }
 
 pub struct Attention {
-    config: AttentionConfig,
-    token_embedding: Vec<Vec<f32>>,
-    positional_encoding: Vec<Vec<f32>>,
-    wq: Vec<Vec<f32>>,
-    wk: Vec<Vec<f32>>,
-    wv: Vec<Vec<f32>>,
-    w1: Vec<Vec<f32>>,
-    w2: Vec<Vec<f32>>,
-    wo: Vec<Vec<f32>>,
+    pub config: AttentionConfig,
+    pub token_embedding: Vec<Vec<f32>>,
+    pub positional_encoding: Vec<Vec<f32>>,
+    pub blocks: Vec<Block>,
+    pub wo: Vec<Vec<f32>>,
 }
 
 impl Attention {
@@ -56,6 +101,7 @@ impl Attention {
         let d = config.embedding_dim;
         let f = config.ffn_hidden;
         let n = config.context_size;
+        let num_blocks = config.num_blocks;
 
         // Fixed sinusoidal positional encoding (constant, never serialized).
         let mut positional_encoding = vec![vec![0.0; d]; n];
@@ -71,11 +117,7 @@ impl Attention {
             config,
             token_embedding: vec![vec![0.0; d]; vocab],
             positional_encoding,
-            wq: vec![vec![0.0; d]; d],
-            wk: vec![vec![0.0; d]; d],
-            wv: vec![vec![0.0; d]; d],
-            w1: vec![vec![0.0; d]; f],
-            w2: vec![vec![0.0; f]; d],
+            blocks: (0..num_blocks).map(|_| Block::new(d, f)).collect(),
             wo: vec![vec![0.0; d]; vocab],
         }
     }
@@ -86,11 +128,9 @@ impl Attention {
     pub fn init_weights(&mut self, rng: &mut calc::Rng) {
         const RANGE: f32 = 0.1;
         calc::fill_uniform(&mut self.token_embedding, RANGE, rng);
-        calc::fill_uniform(&mut self.wq, RANGE, rng);
-        calc::fill_uniform(&mut self.wk, RANGE, rng);
-        calc::fill_uniform(&mut self.wv, RANGE, rng);
-        calc::fill_uniform(&mut self.w1, RANGE, rng);
-        calc::fill_uniform(&mut self.w2, RANGE, rng);
+        for block in &mut self.blocks {
+            block.init_weights(rng);
+        }
         calc::fill_uniform(&mut self.wo, RANGE, rng);
     }
 }
@@ -154,26 +194,32 @@ impl Model for Attention {
                 (0..d).map(|b| emb[b] + pe[b]).collect()
             })
             .collect();
-
-        // --- Self-attention (query at the last position only) ---
-        let q = matvec(&self.wq, &x[t]);
-        let k: Vec<Vec<f32>> = x.iter().map(|xi| matvec(&self.wk, xi)).collect();
-        let v: Vec<Vec<f32>> = x.iter().map(|xi| matvec(&self.wv, xi)).collect();
         let scale = (d as f32).sqrt();
-        let scores: Vec<f32> = k.iter().map(|kj| dot(&q, kj) / scale).collect();
-        let weights = calc::softmax(&scores);
-        let mut attended = vec![0.0; d];
-        for (j, vj) in v.iter().enumerate() {
-            for a in 0..d {
-                attended[a] += weights[j] * vj[a];
-            }
-        }
 
-        // --- Residual 1 + FFN + Residual 2 ---
-        let a: Vec<f32> = (0..d).map(|c| x[t][c] + attended[c]).collect();
-        let act = calc::relu_vec(&matvec(&self.w1, &a));
-        let ffn_out = matvec(&self.w2, &act);
-        let h: Vec<f32> = (0..d).map(|c| a[c] + ffn_out[c]).collect();
+        // --- Stacked blocks: each block consumes the previous block's output
+        // at the last position, while re-reading K/V from the original embedded
+        // sequence. Same residual pattern as a single block, just chained N
+        // times. With a single block the loop body runs once and reproduces
+        // the prior bit-for-bit behavior.
+        let mut current = x[t].clone();
+        for block in &self.blocks {
+            let q = matvec(&block.wq, &current);
+            let k: Vec<Vec<f32>> = x.iter().map(|xi| matvec(&block.wk, xi)).collect();
+            let v: Vec<Vec<f32>> = x.iter().map(|xi| matvec(&block.wv, xi)).collect();
+            let scores: Vec<f32> = k.iter().map(|kj| dot(&q, kj) / scale).collect();
+            let weights = calc::softmax(&scores);
+            let mut attended = vec![0.0; d];
+            for (j, vj) in v.iter().enumerate() {
+                for a in 0..d {
+                    attended[a] += weights[j] * vj[a];
+                }
+            }
+            let a: Vec<f32> = (0..d).map(|c| current[c] + attended[c]).collect();
+            let act = calc::relu_vec(&matvec(&block.w1, &a));
+            let ffn_out = matvec(&block.w2, &act);
+            current = (0..d).map(|c| a[c] + ffn_out[c]).collect();
+        }
+        let h = current;
 
         matvec(&self.wo, &h)
     }
@@ -194,22 +240,52 @@ impl Model for Attention {
                 (0..d).map(|b| emb[b] + pe[b]).collect()
             })
             .collect();
-        let q = matvec(&self.wq, &x[t]);
-        let k: Vec<Vec<f32>> = x.iter().map(|xi| matvec(&self.wk, xi)).collect();
-        let v: Vec<Vec<f32>> = x.iter().map(|xi| matvec(&self.wv, xi)).collect();
-        let scores: Vec<f32> = k.iter().map(|kj| dot(&q, kj) / scale).collect();
-        let weights = calc::softmax(&scores);
-        let mut attended = vec![0.0; d];
-        for (j, vj) in v.iter().enumerate() {
-            for a in 0..d {
-                attended[a] += weights[j] * vj[a];
-            }
+
+        // One cache per block. The block's input is the previous block's h (or
+        // x[t] for block 0). K/V always come from the embedded x, so the
+        // backward will accumulate d_x contributions across blocks.
+        struct Cache {
+            input: Vec<f32>,
+            q: Vec<f32>,
+            k: Vec<Vec<f32>>,
+            v: Vec<Vec<f32>>,
+            weights: Vec<f32>,
+            a: Vec<f32>,
+            pre: Vec<f32>,
+            act: Vec<f32>,
         }
-        let a: Vec<f32> = (0..d).map(|c| x[t][c] + attended[c]).collect();
-        let pre = matvec(&self.w1, &a);
-        let act = calc::relu_vec(&pre);
-        let ffn_out = matvec(&self.w2, &act);
-        let h: Vec<f32> = (0..d).map(|c| a[c] + ffn_out[c]).collect();
+        let mut caches: Vec<Cache> = Vec::with_capacity(self.blocks.len());
+        let mut current = x[t].clone();
+        for block in &self.blocks {
+            let q = matvec(&block.wq, &current);
+            let k: Vec<Vec<f32>> = x.iter().map(|xi| matvec(&block.wk, xi)).collect();
+            let v: Vec<Vec<f32>> = x.iter().map(|xi| matvec(&block.wv, xi)).collect();
+            let scores: Vec<f32> = k.iter().map(|kj| dot(&q, kj) / scale).collect();
+            let weights = calc::softmax(&scores);
+            let mut attended = vec![0.0; d];
+            for (j, vj) in v.iter().enumerate() {
+                for a in 0..d {
+                    attended[a] += weights[j] * vj[a];
+                }
+            }
+            let a: Vec<f32> = (0..d).map(|c| current[c] + attended[c]).collect();
+            let pre = matvec(&block.w1, &a);
+            let act = calc::relu_vec(&pre);
+            let ffn_out = matvec(&block.w2, &act);
+            let h: Vec<f32> = (0..d).map(|c| a[c] + ffn_out[c]).collect();
+            caches.push(Cache {
+                input: current,
+                q,
+                k,
+                v,
+                weights,
+                a,
+                pre,
+                act,
+            });
+            current = h;
+        }
+        let h = current;
         let logits = matvec(&self.wo, &h);
         let probs = calc::softmax(&logits);
         let loss = calc::cross_entropy_loss(&probs, target as usize);
@@ -227,85 +303,107 @@ impl Model for Attention {
             }
         }
 
-        // h = a + ffn_out
-        let mut d_a = d_h.clone();
-        let d_ffn_out = d_h;
-
-        // ffn_out = W2 . act
-        let mut d_w2 = vec![vec![0.0; f]; d];
-        let mut d_act = vec![0.0; f];
-        for (c, row) in self.w2.iter().enumerate() {
-            for m in 0..f {
-                d_w2[c][m] = d_ffn_out[c] * act[m];
-                d_act[m] += row[m] * d_ffn_out[c];
-            }
-        }
-        // act = relu(pre)
-        let d_pre: Vec<f32> = (0..f)
-            .map(|m| if pre[m] > 0.0 { d_act[m] } else { 0.0 })
-            .collect();
-        // pre = W1 . a
-        let mut d_w1 = vec![vec![0.0; d]; f];
-        for (m, row) in self.w1.iter().enumerate() {
-            for c in 0..d {
-                d_w1[m][c] = d_pre[m] * a[c];
-                d_a[c] += row[c] * d_pre[m];
-            }
-        }
-
-        // a = X[t] + attended
+        // d_x accumulates contributions from EVERY block's K/V (and from the
+        // first block's Q, since block 0's input is x[t]).
         let mut d_x = vec![vec![0.0; d]; n];
-        for c in 0..d {
-            d_x[t][c] += d_a[c];
-        }
-        let d_attended = d_a;
+        // Iterate blocks in reverse: d_h is the gradient on the current block's
+        // h. After we backprop, d_h becomes the gradient on the current block's
+        // input (which is the previous block's h, or x[t] for block 0).
+        for (block, cache) in self.blocks.iter_mut().rev().zip(caches.iter().rev()) {
+            // h = a + ffn_out
+            let mut d_a = d_h.clone();
+            let d_ffn_out = d_h;
 
-        // attended = sum_j weights[j] * V[j]
-        let mut d_weights = vec![0.0; n];
-        let mut d_v = vec![vec![0.0; d]; n];
-        for j in 0..n {
-            for c in 0..d {
-                d_weights[j] += d_attended[c] * v[j][c];
-                d_v[j][c] = weights[j] * d_attended[c];
-            }
-        }
-
-        // Softmax over scores
-        let weighted_sum: f32 = (0..n).map(|kk| weights[kk] * d_weights[kk]).sum();
-        let d_scores: Vec<f32> = (0..n)
-            .map(|j| weights[j] * (d_weights[j] - weighted_sum))
-            .collect();
-
-        // scores[j] = (Q . K[j]) / sqrt(d)
-        let mut d_q = vec![0.0; d];
-        let mut d_k = vec![vec![0.0; d]; n];
-        for j in 0..n {
-            for c in 0..d {
-                d_q[c] += d_scores[j] * k[j][c] / scale;
-                d_k[j][c] = d_scores[j] * q[c] / scale;
-            }
-        }
-
-        // Q = Wq . X[t]
-        let mut d_wq = vec![vec![0.0; d]; d];
-        for c in 0..d {
-            for b in 0..d {
-                d_wq[c][b] += d_q[c] * x[t][b];
-                d_x[t][b] += self.wq[c][b] * d_q[c];
-            }
-        }
-        // K[j] = Wk . X[j], V[j] = Wv . X[j]
-        let mut d_wk = vec![vec![0.0; d]; d];
-        let mut d_wv = vec![vec![0.0; d]; d];
-        for j in 0..n {
-            for c in 0..d {
-                for b in 0..d {
-                    d_wk[c][b] += d_k[j][c] * x[j][b];
-                    d_x[j][b] += self.wk[c][b] * d_k[j][c];
-                    d_wv[c][b] += d_v[j][c] * x[j][b];
-                    d_x[j][b] += self.wv[c][b] * d_v[j][c];
+            // ffn_out = W2 . act
+            let mut d_w2 = vec![vec![0.0; f]; d];
+            let mut d_act = vec![0.0; f];
+            for (c, row) in block.w2.iter().enumerate() {
+                for m in 0..f {
+                    d_w2[c][m] = d_ffn_out[c] * cache.act[m];
+                    d_act[m] += row[m] * d_ffn_out[c];
                 }
             }
+            // act = relu(pre)
+            let d_pre: Vec<f32> = (0..f)
+                .map(|m| if cache.pre[m] > 0.0 { d_act[m] } else { 0.0 })
+                .collect();
+            // pre = W1 . a
+            let mut d_w1 = vec![vec![0.0; d]; f];
+            for (m, row) in block.w1.iter().enumerate() {
+                for c in 0..d {
+                    d_w1[m][c] = d_pre[m] * cache.a[c];
+                    d_a[c] += row[c] * d_pre[m];
+                }
+            }
+
+            // a = input + attended; track d_x[t] from `a = ... + d_a` residual.
+            // Also reset d_h to zero so we can use it as the gradient on the
+            // block's input for the next iteration.
+            let mut d_h_new = vec![0.0; d];
+            for c in 0..d {
+                d_h_new[c] = d_a[c];
+                d_x[t][c] += d_a[c];
+            }
+            let d_attended = d_a;
+
+            // attended = sum_j weights[j] * V[j]
+            let mut d_weights = vec![0.0; n];
+            let mut d_v = vec![vec![0.0; d]; n];
+            for j in 0..n {
+                for c in 0..d {
+                    d_weights[j] += d_attended[c] * cache.v[j][c];
+                    d_v[j][c] = cache.weights[j] * d_attended[c];
+                }
+            }
+
+            // Softmax over scores
+            let weighted_sum: f32 = (0..n).map(|kk| cache.weights[kk] * d_weights[kk]).sum();
+            let d_scores: Vec<f32> = (0..n)
+                .map(|j| cache.weights[j] * (d_weights[j] - weighted_sum))
+                .collect();
+
+            // scores[j] = (Q . K[j]) / sqrt(d)
+            let mut d_q = vec![0.0; d];
+            let mut d_k = vec![vec![0.0; d]; n];
+            for j in 0..n {
+                for c in 0..d {
+                    d_q[c] += d_scores[j] * cache.k[j][c] / scale;
+                    d_k[j][c] = d_scores[j] * cache.q[c] / scale;
+                }
+            }
+
+            // Q = Wq . input; gradient w.r.t. input lands in d_h_new (for the
+            // previous block) and in d_x[t] (for the first block, where input
+            // is x[t]).
+            let mut d_wq = vec![vec![0.0; d]; d];
+            for c in 0..d {
+                for b in 0..d {
+                    d_wq[c][b] += d_q[c] * cache.input[b];
+                    d_h_new[b] += block.wq[c][b] * d_q[c];
+                }
+            }
+            // K[j] = Wk . X[j], V[j] = Wv . X[j]; both flow into d_x[j].
+            let mut d_wk = vec![vec![0.0; d]; d];
+            let mut d_wv = vec![vec![0.0; d]; d];
+            for j in 0..n {
+                for c in 0..d {
+                    for b in 0..d {
+                        d_wk[c][b] += d_k[j][c] * x[j][b];
+                        d_x[j][b] += block.wk[c][b] * d_k[j][c];
+                        d_wv[c][b] += d_v[j][c] * x[j][b];
+                        d_x[j][b] += block.wv[c][b] * d_v[j][c];
+                    }
+                }
+            }
+
+            // SGD update on this block's weights.
+            update(&mut block.wq, &d_wq, learning_rate);
+            update(&mut block.wk, &d_wk, learning_rate);
+            update(&mut block.wv, &d_wv, learning_rate);
+            update(&mut block.w1, &d_w1, learning_rate);
+            update(&mut block.w2, &d_w2, learning_rate);
+
+            d_h = d_h_new;
         }
 
         // X[i] = token_embedding[ctx[i]] + PE[i]
@@ -317,11 +415,6 @@ impl Model for Attention {
         }
 
         // ----------------------- SGD UPDATE ----------------------------------
-        update(&mut self.wq, &d_wq, learning_rate);
-        update(&mut self.wk, &d_wk, learning_rate);
-        update(&mut self.wv, &d_wv, learning_rate);
-        update(&mut self.w1, &d_w1, learning_rate);
-        update(&mut self.w2, &d_w2, learning_rate);
         update(&mut self.wo, &d_wo, learning_rate);
         for token in context.iter().copied().collect::<HashSet<u16>>() {
             for (w, g) in self.token_embedding[token as usize]
@@ -337,21 +430,25 @@ impl Model for Attention {
 
     fn save(&self, writer: &mut dyn Write) -> std::io::Result<()> {
         write_matrix(writer, &self.token_embedding)?;
-        write_matrix(writer, &self.wq)?;
-        write_matrix(writer, &self.wk)?;
-        write_matrix(writer, &self.wv)?;
-        write_matrix(writer, &self.w1)?;
-        write_matrix(writer, &self.w2)?;
+        for block in &self.blocks {
+            write_matrix(writer, &block.wq)?;
+            write_matrix(writer, &block.wk)?;
+            write_matrix(writer, &block.wv)?;
+            write_matrix(writer, &block.w1)?;
+            write_matrix(writer, &block.w2)?;
+        }
         write_matrix(writer, &self.wo)
     }
 
     fn load(&mut self, reader: &mut dyn Read) -> std::io::Result<()> {
         read_matrix(reader, &mut self.token_embedding)?;
-        read_matrix(reader, &mut self.wq)?;
-        read_matrix(reader, &mut self.wk)?;
-        read_matrix(reader, &mut self.wv)?;
-        read_matrix(reader, &mut self.w1)?;
-        read_matrix(reader, &mut self.w2)?;
+        for block in &mut self.blocks {
+            read_matrix(reader, &mut block.wq)?;
+            read_matrix(reader, &mut block.wk)?;
+            read_matrix(reader, &mut block.wv)?;
+            read_matrix(reader, &mut block.w1)?;
+            read_matrix(reader, &mut block.w2)?;
+        }
         read_matrix(reader, &mut self.wo)
     }
 }
@@ -376,6 +473,7 @@ mod tests {
             context_size: 2,
             embedding_dim: 2,
             ffn_hidden: 4,
+            num_blocks: 1,
         });
 
         // Zero PE so the hand computation is clean. w1/w2 stay zero (from `new`),
@@ -391,7 +489,7 @@ mod tests {
         // attended = avg([1,0], [0,1]) = [0.5, 0.5].
         // Residual 1: a = X[t] + attended = [0,1] + [0.5,0.5] = [0.5, 1.5].
         // FFN is zero, so h = a. logits = wo . [0.5, 1.5].
-        model.wv = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        model.blocks[0].wv = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
         model.wo = vec![
             vec![1.0, 0.0],
             vec![0.0, 1.0],
@@ -410,6 +508,7 @@ mod tests {
             context_size: 2,
             embedding_dim: 8,
             ffn_hidden: 32,
+            num_blocks: 1,
         });
 
         model.init_weights(&mut calc::Rng::new(0x5EED));
@@ -422,12 +521,125 @@ mod tests {
     }
 
     #[test]
+    fn test_attention_two_blocks_predicts_target_after_training() {
+        let mut model = Attention::new(AttentionConfig {
+            vocab_size: 8,
+            context_size: 2,
+            embedding_dim: 8,
+            ffn_hidden: 32,
+            num_blocks: 2,
+        });
+
+        model.init_weights(&mut calc::Rng::new(0x5EED));
+
+        for _ in 0..200 {
+            model.train_step(&[1, 2], 3, 0.5);
+        }
+
+        assert_eq!(argmax(&model.forward(&[1, 2])), 3);
+    }
+
+    #[test]
+    fn test_attention_has_one_block_by_default() {
+        let model = Attention::new(AttentionConfig {
+            vocab_size: 4,
+            context_size: 2,
+            embedding_dim: 2,
+            ffn_hidden: 4,
+            num_blocks: 1,
+        });
+        assert_eq!(model.blocks.len(), 1);
+    }
+
+    #[test]
+    fn test_attention_stacks_n_blocks_per_config() {
+        let model = Attention::new(AttentionConfig {
+            vocab_size: 4,
+            context_size: 2,
+            embedding_dim: 2,
+            ffn_hidden: 4,
+            num_blocks: 2,
+        });
+        assert_eq!(model.blocks.len(), 2);
+    }
+
+    #[test]
+    fn test_attention_same_seed_same_weights_same_forward() {
+        let cfg = AttentionConfig {
+            vocab_size: 8,
+            context_size: 2,
+            embedding_dim: 8,
+            ffn_hidden: 32,
+            num_blocks: 1,
+        };
+        let mut a = Attention::new(cfg.clone());
+        a.init_weights(&mut calc::Rng::new(0x5EED));
+        let mut b = Attention::new(cfg);
+        b.init_weights(&mut calc::Rng::new(0x5EED));
+        assert_eq!(a.forward(&[1, 2]), b.forward(&[1, 2]));
+    }
+
+    #[test]
+    fn test_attention_two_blocks_forward_chains_blocks() {
+        // Same init seed + same FFN-zerod config: 1 block vs 2 blocks must
+        // produce different outputs, because block 0's output feeds block 1.
+        // If forward ignored blocks past index 0, the outputs would match.
+        let cfg = AttentionConfig {
+            vocab_size: 8,
+            context_size: 2,
+            embedding_dim: 8,
+            ffn_hidden: 32,
+            num_blocks: 1,
+        };
+        let mut one = Attention::new(cfg.clone());
+        one.init_weights(&mut calc::Rng::new(0x5EED));
+
+        let mut two = Attention::new(AttentionConfig { num_blocks: 2, ..cfg });
+        two.init_weights(&mut calc::Rng::new(0x5EED));
+        // Copy block 0's weights into block 1, and align wo + token_embedding
+        // with the 1-block model, so the ONLY difference between the two models
+        // is the existence of a second pass through the same block. If forward
+        // ignores blocks past index 0, the outputs match.
+        two.wo = one.wo.clone();
+        two.token_embedding = one.token_embedding.clone();
+        for b in 0..8 {
+            for c in 0..8 {
+                two.blocks[1].wq[b][c] = two.blocks[0].wq[b][c];
+                two.blocks[1].wk[b][c] = two.blocks[0].wk[b][c];
+                two.blocks[1].wv[b][c] = two.blocks[0].wv[b][c];
+            }
+        }
+        for b in 0..32 {
+            for c in 0..8 {
+                two.blocks[1].w1[b][c] = two.blocks[0].w1[b][c];
+            }
+        }
+        for b in 0..8 {
+            for c in 0..32 {
+                two.blocks[1].w2[b][c] = two.blocks[0].w2[b][c];
+            }
+        }
+
+        let logits_one = one.forward(&[1, 2]);
+        let logits_two = two.forward(&[1, 2]);
+        // block 0 of `two` is identical to `one`'s only block; block 1 is a
+        // copy of block 0. wo and token_embedding are aligned across models.
+        // If forward ignores blocks past index 0, the two outputs match
+        // exactly. Chaining block 1 must change the output.
+        assert_ne!(
+            logits_one, logits_two,
+            "2 blocks must chain: identical block weights twice should not equal 1 block"
+        );
+    }
+
+    #[test]
     fn test_attention_save_load_round_trip_preserves_forward() {
         let config = AttentionConfig {
             vocab_size: 8,
             context_size: 3,
             embedding_dim: 4,
             ffn_hidden: 16,
+            num_blocks: 1,
         };
 
         let mut source = Attention::new(config.clone());
