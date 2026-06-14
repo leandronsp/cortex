@@ -238,13 +238,17 @@ impl Model for Mlp {
 
         // --- Embeddings ---
         // grad = d_embedding[token][k]
-        for &token in context.iter() {
-            for (k, item) in d_embedding
-                .iter()
-                .enumerate()
-                .take(self.config.embedding_dim)
+        // avoid re-visiting tokens by only updating each unique token once.
+        for token in context
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<u16>>()
+        {
+            for (embedding, grad) in self.embedding[token as usize]
+                .iter_mut()
+                .zip(&d_embedding[token as usize])
             {
-                self.embedding[token as usize][k] -= learning_rate * item[k];
+                *embedding -= learning_rate * grad;
             }
         }
 
@@ -377,5 +381,25 @@ mod tests {
 
         // Layer 1 receives layer 0's output (hidden_dim), not the embedding input.
         assert_eq!(mlp.hidden_layers[1].weights[0].len(), 3);
+    }
+
+    #[test]
+    fn test_mlp_train_step_repeated_token_updates_embedding_once() {
+        let mut mlp = Mlp::new(MlpConfig {
+            vocab_size: 2,
+            context_size: 2,
+            embedding_dim: 1,
+            hidden_dim: 1,
+            num_hidden_layers: 1,
+        });
+
+        mlp.embedding = vec![vec![1.0], vec![1.0]];
+        mlp.hidden_layers[0].weights = vec![vec![1.0, 1.0]];
+        mlp.output_layer.weights = vec![vec![1.0], vec![0.0]];
+
+        mlp.train_step(&[0, 0], 1, 1.0);
+
+        eprintln!("DEBUG emb[0][0] = {}", mlp.embedding[0][0]);
+        assert!((mlp.embedding[0][0] - (-0.7616)).abs() < 1e-3);
     }
 }
