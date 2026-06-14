@@ -18,12 +18,14 @@ const MAX_GENERATED_TOKENS: usize = 200;
 
 struct App {
     cortex: Cortex,
+    top_k: usize,
+    temperature: f32,
     transcript: Vec<Line<'static>>,
     input: String,
     quit: bool,
 }
 
-pub fn run(cortex: Cortex) -> io::Result<()> {
+pub fn run(cortex: Cortex, top_k: usize, temperature: f32) -> io::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
@@ -32,6 +34,8 @@ pub fn run(cortex: Cortex) -> io::Result<()> {
 
     let mut app = App {
         cortex,
+        top_k,
+        temperature,
         transcript: vec![Line::from(Span::raw(
             "cortex chat. type a prompt, enter to send, esc to quit.",
         ))],
@@ -79,7 +83,7 @@ fn submit(app: &mut App) {
         format!("> {}", prompt),
         Style::new().bold(),
     )));
-    let completion = app.cortex.generate(&prompt, MAX_GENERATED_TOKENS);
+    let completion = app.cortex.generate(&prompt, MAX_GENERATED_TOKENS, app.top_k, app.temperature);
     app.transcript.push(Line::from(Span::raw(completion)));
 }
 

@@ -54,7 +54,7 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
 
-    if let Err(e) = tui::run(cortex) {
+    if let Err(e) = tui::run(cortex, config.sampling.top_k, config.sampling.temperature) {
         eprintln!("tui error: {}", e);
         return ExitCode::from(1);
     }
