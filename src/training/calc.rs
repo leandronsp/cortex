@@ -53,6 +53,11 @@ impl Rng {
         let unit = (self.next_u64() >> 40) as f32 / (1u64 << 24) as f32;
         (unit * 2.0 - 1.0) * range
     }
+
+    /// Uniform value in [0, 1).
+    pub fn uniform01(&mut self) -> f32 {
+        (self.next_u64() >> 40) as f32 / (1u64 << 24) as f32
+    }
 }
 
 pub fn fill_uniform(matrix: &mut [Vec<f32>], range: f32, rng: &mut Rng) {
