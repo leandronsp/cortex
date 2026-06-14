@@ -1,3 +1,4 @@
 the quick brown fox jumps over the lazy dog
 hello world hello cortex hello bigram
 to be or not to be that is the question
+all the worlds a stage and all the men and women merely players
