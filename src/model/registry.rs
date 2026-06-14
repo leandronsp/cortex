@@ -24,6 +24,7 @@ mod tests {
         let section = ModelSection {
             name: "bigram".to_string(),
             vocab_size: 64,
+            ..Default::default()
         };
         let model = create_model(&section).unwrap();
         assert_eq!(model.vocab_size(), 64);
@@ -34,6 +35,7 @@ mod tests {
         let section = ModelSection {
             name: "transformer".to_string(),
             vocab_size: 256,
+            ..Default::default()
         };
         let err = match create_model(&section) {
             Ok(_) => panic!("expected error"),

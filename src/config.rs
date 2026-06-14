@@ -9,10 +9,18 @@ pub struct Config {
     pub weights: WeightsSection,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct ModelSection {
     pub name: String,
     pub vocab_size: u16,
+    #[serde(default)]
+    pub context_size: Option<usize>,
+    #[serde(default)]
+    pub embedding_dim: Option<usize>,
+    #[serde(default)]
+    pub hidden_dim: Option<usize>,
+    #[serde(default)]
+    pub num_hidden_layers: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,6 +74,32 @@ mod tests {
         assert_eq!(cfg.training.epochs, 200);
         assert_eq!(cfg.training.learning_rate, 1.0);
         assert_eq!(cfg.weights.path, "target/bigram.bin");
+    }
+
+    #[test]
+    fn parses_mlp_config() {
+        let input = r#"
+    [model]
+    name = "mlp"
+    vocab_size = 256
+    context_size = 3
+    embedding_dim = 16
+    hidden_dim = 64
+    num_hidden_layers = 2
+
+    [training]
+    corpus = "data/corpus.txt"
+    epochs = 200
+    learning_rate = 0.1
+
+    [weights]
+    path = "target/mlp.bin"
+    "#;
+        let cfg = Config::parse(input).unwrap();
+        assert_eq!(cfg.model.context_size, Some(3));
+        assert_eq!(cfg.model.embedding_dim, Some(16));
+        assert_eq!(cfg.model.hidden_dim, Some(64));
+        assert_eq!(cfg.model.num_hidden_layers, Some(2));
     }
 
     #[test]
