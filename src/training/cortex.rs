@@ -2,6 +2,7 @@ use std::io::{Read, Write};
 
 use crate::model::Model;
 use crate::tokenization::Bpe;
+use crate::training::calc;
 
 /// Special token prepended to every sequence during training and used for
 /// left-padding short prompts during generation. It lives just above the
@@ -11,6 +12,7 @@ const BOS: u16 = 256;
 pub struct Cortex {
     bpe: Bpe,
     model: Box<dyn Model>,
+    rng: calc::Rng,
 }
 
 pub struct TrainReport {
@@ -22,7 +24,11 @@ pub struct TrainReport {
 
 impl Cortex {
     pub fn new(model: Box<dyn Model>) -> Self {
-        Self { bpe: Bpe::new(), model }
+        Self {
+            bpe: Bpe::new(),
+            model,
+            rng: calc::Rng::new(0xC0FFEE),
+        }
     }
 
     pub fn train(&mut self, corpus: &str, epochs: usize, learning_rate: f32) -> TrainReport {
@@ -59,17 +65,24 @@ impl Cortex {
         }
     }
 
-    pub fn generate(&self, prompt: &str, max_tokens: usize) -> String {
+    pub fn generate(
+        &mut self,
+        prompt: &str,
+        max_tokens: usize,
+        top_k: usize,
+        temperature: f32,
+    ) -> String {
         let mut context = self.bpe.encode(prompt);
         if context.is_empty() {
             return String::new();
         }
         let context_size = self.model.context_size();
+        let vocab_size = self.model.vocab_size() as usize;
         let mut produced: Vec<u8> = Vec::new();
         for _ in 0..max_tokens {
             let window = last_window(&context, context_size);
             let logits = self.model.forward(&window);
-            let next = argmax(&logits) as u16;
+            let next = sample(&logits, vocab_size, top_k, temperature, &mut self.rng);
             let byte = next as u8;
             produced.push(byte);
             context.push(next);
@@ -110,6 +123,43 @@ impl Cortex {
         self.bpe.set_merges(merges);
         self.model.load(reader)
     }
+}
+
+/// Sample the next token from logits. `top_k = 1` is greedy argmax.
+/// Temperature scales the logits before softmax: lower values make the
+/// distribution sharper, higher values more uniform.
+fn sample(
+    logits: &[f32],
+    vocab_size: usize,
+    top_k: usize,
+    temperature: f32,
+    rng: &mut calc::Rng,
+) -> u16 {
+    if top_k == 1 || temperature == 0.0 {
+        return argmax(logits) as u16;
+    }
+
+    let scaled: Vec<f32> = logits.iter().map(|&x| x / temperature).collect();
+    let probs = calc::softmax(&scaled);
+
+    let mut indexed: Vec<(usize, f32)> = probs.into_iter().enumerate().collect();
+    indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+    let k = top_k.min(vocab_size).max(1);
+    let top: Vec<(usize, f32)> = indexed.into_iter().take(k).collect();
+    let total: f32 = top.iter().map(|(_, p)| p).sum();
+
+    let r = rng.uniform01();
+    let mut cumulative = 0.0;
+    let mut last = 0u16;
+    for (i, p) in &top {
+        cumulative += p / total;
+        last = *i as u16;
+        if r <= cumulative {
+            return last;
+        }
+    }
+    last
 }
 
 /// The last `size` tokens of `context`, left-padded with BOS when the context
@@ -206,16 +256,16 @@ mod tests {
 
     #[test]
     fn generate_caps_at_max_tokens() {
-        let cortex = Cortex::new(Box::new(FakeModel::new(1)));
-        let out = cortex.generate("a", 5);
+        let mut cortex = Cortex::new(Box::new(FakeModel::new(1)));
+        let out = cortex.generate("a", 5, 1, 1.0);
         assert_eq!(out.chars().count(), 5);
     }
 
     #[test]
     fn generate_stops_on_newline() {
         // '\t' (9) makes the model predict '\n' (10), which halts decoding.
-        let cortex = Cortex::new(Box::new(FakeModel::new(1)));
-        let out = cortex.generate("\t", 100);
+        let mut cortex = Cortex::new(Box::new(FakeModel::new(1)));
+        let out = cortex.generate("\t", 100, 1, 1.0);
         assert_eq!(out, "\n");
     }
 
@@ -223,8 +273,8 @@ mod tests {
     fn generate_pads_and_slides_context_window() {
         // cs=2 with a 1-token prompt: only passes if generate left-pads the
         // short prompt and slides a 2-token window (FakeModel asserts len == 2).
-        let cortex = Cortex::new(Box::new(FakeModel::new(2)));
-        let out = cortex.generate("a", 3);
+        let mut cortex = Cortex::new(Box::new(FakeModel::new(2)));
+        let out = cortex.generate("a", 3, 1, 1.0);
         assert_eq!(out.chars().count(), 3);
     }
 
@@ -232,7 +282,7 @@ mod tests {
     fn save_load_round_trip_preserves_generation() {
         let mut source = Cortex::new(Box::new(FakeModel::new(1)));
         source.train("the quick brown fox", 3, 1.0);
-        let expected = source.generate("t", 8);
+        let expected = source.generate("t", 8, 1, 1.0);
 
         let mut buf: Vec<u8> = Vec::new();
         source.save(&mut buf).unwrap();
@@ -240,7 +290,7 @@ mod tests {
         let mut restored = Cortex::new(Box::new(FakeModel::new(1)));
         restored.load(&mut buf.as_slice()).unwrap();
 
-        assert_eq!(restored.generate("t", 8), expected);
+        assert_eq!(restored.generate("t", 8, 1, 1.0), expected);
     }
 
     /// Minimal Model double that records every context it sees. Lets us test
@@ -306,8 +356,8 @@ mod tests {
     #[test]
     fn generate_left_pads_short_prompt_with_bos() {
         let (model, contexts) = RecordingModel::new(4);
-        let cortex = Cortex::new(Box::new(model));
-        cortex.generate("ab", 1);
+        let mut cortex = Cortex::new(Box::new(model));
+        cortex.generate("ab", 1, 1, 1.0);
 
         let window = &contexts.borrow()[0];
         assert_eq!(
@@ -320,8 +370,8 @@ mod tests {
     #[test]
     fn generate_does_not_pad_when_prompt_fills_window() {
         let (model, contexts) = RecordingModel::new(2);
-        let cortex = Cortex::new(Box::new(model));
-        cortex.generate("ab", 1);
+        let mut cortex = Cortex::new(Box::new(model));
+        cortex.generate("ab", 1, 1, 1.0);
 
         let window = &contexts.borrow()[0];
         assert_eq!(
@@ -331,4 +381,19 @@ mod tests {
         );
     }
 
+    #[test]
+    fn sample_top_k_one_is_greedy_argmax() {
+        let logits = vec![1.0, 2.0, 3.0, 0.5];
+        let mut rng = calc::Rng::new(0x5EED);
+        assert_eq!(sample(&logits, 4, 1, 1.0, &mut rng), 2);
+    }
+
+    #[test]
+    fn sample_top_k_picks_from_top_tokens() {
+        let logits = vec![0.1, 5.0, 0.2, 5.0, 0.3];
+        let mut rng = calc::Rng::new(0x5EED);
+        let token = sample(&logits, 5, 2, 1.0, &mut rng);
+        assert!(token == 1 || token == 3, "top-2 must return one of the two best tokens");
+    }
 }
+
