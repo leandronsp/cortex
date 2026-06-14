@@ -53,9 +53,11 @@ impl Cortex {
         if context.is_empty() {
             return String::new();
         }
+        let context_size = self.model.context_size();
         let mut produced: Vec<u8> = Vec::new();
         for _ in 0..max_tokens {
-            let logits = self.model.forward(&context);
+            let window = last_window(&context, context_size);
+            let logits = self.model.forward(&window);
             let next = argmax(&logits) as u16;
             let byte = next as u8;
             produced.push(byte);
@@ -97,6 +99,16 @@ impl Cortex {
         self.bpe.set_merges(merges);
         self.model.load(reader)
     }
+}
+
+/// The last `size` tokens of `context`, left-padded with token 0 when the
+/// context is shorter. The MLP needs exactly `context_size` tokens; the bigram
+/// (size 1) just gets the most recent token.
+fn last_window(context: &[u16], size: usize) -> Vec<u16> {
+    let mut window = vec![0u16; size];
+    let take = context.len().min(size);
+    window[size - take..].copy_from_slice(&context[context.len() - take..]);
+    window
 }
 
 fn argmax(values: &[f32]) -> usize {
@@ -142,6 +154,11 @@ mod tests {
         }
 
         fn forward(&self, context: &[u16]) -> Vec<f32> {
+            assert_eq!(
+                context.len(),
+                self.context_size,
+                "engine must feed exactly context_size tokens"
+            );
             let next = context.last().copied().unwrap_or(0).wrapping_add(1);
             let mut logits = vec![0.0; 256];
             logits[next as usize] = 1.0;
@@ -187,6 +204,15 @@ mod tests {
         let cortex = Cortex::new(Box::new(FakeModel::new(1)));
         let out = cortex.generate("\t", 100);
         assert_eq!(out, "\n");
+    }
+
+    #[test]
+    fn generate_pads_and_slides_context_window() {
+        // cs=2 with a 1-token prompt: only passes if generate left-pads the
+        // short prompt and slides a 2-token window (FakeModel asserts len == 2).
+        let cortex = Cortex::new(Box::new(FakeModel::new(2)));
+        let out = cortex.generate("a", 3);
+        assert_eq!(out.chars().count(), 3);
     }
 
     #[test]
