@@ -7,6 +7,24 @@ pub struct Config {
     pub model: ModelSection,
     pub training: TrainingSection,
     pub weights: WeightsSection,
+    #[serde(default)]
+    pub sampling: SamplingSection,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct SamplingSection {
+    #[serde(default = "default_top_k")]
+    pub top_k: usize,
+    #[serde(default = "default_temperature")]
+    pub temperature: f32,
+}
+
+fn default_top_k() -> usize {
+    1
+}
+
+fn default_temperature() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Default, Deserialize)]
