@@ -3,6 +3,11 @@ use std::io::{Read, Write};
 use crate::model::Model;
 use crate::tokenization::Bpe;
 
+/// Special token prepended to every sequence during training and used for
+/// left-padding short prompts during generation. It lives just above the
+/// byte range so it can never collide with raw text tokens.
+const BOS: u16 = 256;
+
 pub struct Cortex {
     bpe: Bpe,
     model: Box<dyn Model>,
@@ -21,7 +26,13 @@ impl Cortex {
     }
 
     pub fn train(&mut self, corpus: &str, epochs: usize, learning_rate: f32) -> TrainReport {
-        let tokens = self.bpe.encode(corpus);
+        // Prepend BOS so the model learns what "beginning of text" looks like.
+        // This lets short prompts align with a real training position instead
+        // of falling into the OOD padding regime of the unseen byte 0.
+        let encoded = self.bpe.encode(corpus);
+        let mut tokens = Vec::with_capacity(encoded.len() + 1);
+        tokens.push(BOS);
+        tokens.extend(encoded);
         let context_size = self.model.context_size();
         let mut first_avg_loss = 0.0;
         let mut last_avg_loss = 0.0;
@@ -101,11 +112,11 @@ impl Cortex {
     }
 }
 
-/// The last `size` tokens of `context`, left-padded with token 0 when the
-/// context is shorter. The MLP needs exactly `context_size` tokens; the bigram
-/// (size 1) just gets the most recent token.
+/// The last `size` tokens of `context`, left-padded with BOS when the context
+/// is shorter. The MLP needs exactly `context_size` tokens; the bigram (size 1)
+/// just gets the most recent token.
 fn last_window(context: &[u16], size: usize) -> Vec<u16> {
-    let mut window = vec![0u16; size];
+    let mut window = vec![BOS; size];
     let take = context.len().min(size);
     window[size - take..].copy_from_slice(&context[context.len() - take..]);
     window
@@ -146,7 +157,8 @@ mod tests {
 
     impl Model for FakeModel {
         fn vocab_size(&self) -> u16 {
-            256
+            // Must include BOS, which lives above the byte range.
+            BOS + 1
         }
 
         fn context_size(&self) -> usize {
@@ -159,8 +171,9 @@ mod tests {
                 self.context_size,
                 "engine must feed exactly context_size tokens"
             );
-            let next = context.last().copied().unwrap_or(0).wrapping_add(1);
-            let mut logits = vec![0.0; 256];
+            let last = context.last().copied().unwrap_or(BOS);
+            let next = (last.wrapping_add(1)) % self.vocab_size();
+            let mut logits = vec![0.0; self.vocab_size() as usize];
             logits[next as usize] = 1.0;
             logits
         }
@@ -229,4 +242,93 @@ mod tests {
 
         assert_eq!(restored.generate("t", 8), expected);
     }
+
+    /// Minimal Model double that records every context it sees. Lets us test
+    /// Cortex sequencing/padding decisions without depending on a real model.
+    struct RecordingModel {
+        context_size: usize,
+        contexts: std::rc::Rc<std::cell::RefCell<Vec<Vec<u16>>>>,
+    }
+
+    impl RecordingModel {
+        fn new(context_size: usize) -> (Self, std::rc::Rc<std::cell::RefCell<Vec<Vec<u16>>>>) {
+            let contexts = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            (
+                Self {
+                    context_size,
+                    contexts: contexts.clone(),
+                },
+                contexts,
+            )
+        }
+    }
+
+    impl Model for RecordingModel {
+        fn vocab_size(&self) -> u16 {
+            BOS + 1
+        }
+
+        fn context_size(&self) -> usize {
+            self.context_size
+        }
+
+        fn forward(&self, context: &[u16]) -> Vec<f32> {
+            self.contexts.borrow_mut().push(context.to_vec());
+            vec![0.0; self.vocab_size() as usize]
+        }
+
+        fn train_step(&mut self, context: &[u16], _target: u16, _learning_rate: f32) -> f32 {
+            self.contexts.borrow_mut().push(context.to_vec());
+            0.0
+        }
+
+        fn save(&self, writer: &mut dyn Write) -> std::io::Result<()> {
+            writer.write_all(&0f32.to_le_bytes())
+        }
+
+        fn load(&mut self, reader: &mut dyn Read) -> std::io::Result<()> {
+            let mut buf = [0u8; 4];
+            reader.read_exact(&mut buf)?;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn train_prefixes_corpus_with_bos_token() {
+        let (model, contexts) = RecordingModel::new(2);
+        let mut cortex = Cortex::new(Box::new(model));
+        cortex.train("ab", 1, 1.0);
+
+        let first = &contexts.borrow()[0];
+        assert_eq!(first[0], BOS, "first training context must start with BOS");
+    }
+
+    #[test]
+    fn generate_left_pads_short_prompt_with_bos() {
+        let (model, contexts) = RecordingModel::new(4);
+        let cortex = Cortex::new(Box::new(model));
+        cortex.generate("ab", 1);
+
+        let window = &contexts.borrow()[0];
+        assert_eq!(
+            window,
+            &vec![BOS, BOS, 'a' as u16, 'b' as u16],
+            "short prompt must be left-padded with BOS"
+        );
+    }
+
+    #[test]
+    fn generate_does_not_pad_when_prompt_fills_window() {
+        let (model, contexts) = RecordingModel::new(2);
+        let cortex = Cortex::new(Box::new(model));
+        cortex.generate("ab", 1);
+
+        let window = &contexts.borrow()[0];
+        assert_eq!(
+            window,
+            &vec!['a' as u16, 'b' as u16],
+            "full-length prompt must not be padded"
+        );
+    }
+
 }
