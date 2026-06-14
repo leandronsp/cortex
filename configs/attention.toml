@@ -2,12 +2,12 @@
 name = "attention"
 vocab_size = 257
 context_size = 8
-embedding_dim = 32
-hidden_dim = 128
+embedding_dim = 64
+hidden_dim = 256
 
 [training]
 corpus = "configs/corpus.txt"
-epochs = 200
+epochs = 600
 learning_rate = 0.02
 
 [weights]
