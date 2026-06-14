@@ -1,5 +1,6 @@
 use std::io::{Read, Write};
 
+pub mod attention;
 pub mod bigram;
 pub mod layer;
 pub mod mlp;

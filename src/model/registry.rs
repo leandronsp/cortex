@@ -1,10 +1,11 @@
+use crate::model::attention::{Attention, AttentionConfig};
 use crate::model::bigram::Bigram;
 use crate::model::mlp::{Mlp, MlpConfig};
 use crate::config::ModelSection;
 use crate::training::calc;
 use super::Model;
 
-const AVAILABLE: &[&str] = &["bigram", "mlp"];
+const AVAILABLE: &[&str] = &["bigram", "mlp", "attention"];
 
 // Fixed seed keeps initialization reproducible across runs.
 const INIT_SEED: u64 = 0x5EED;
@@ -23,6 +24,16 @@ pub fn create_model(section: &ModelSection) -> Result<Box<dyn Model>, String> {
             mlp.init_weights(&mut calc::Rng::new(INIT_SEED));
             Ok(Box::new(mlp))
         }
+        "attention" => {
+            let mut model = Attention::new(AttentionConfig {
+                vocab_size: section.vocab_size,
+                context_size: required(section.context_size, "context_size")?,
+                embedding_dim: required(section.embedding_dim, "embedding_dim")?,
+                ffn_hidden: required(section.hidden_dim, "hidden_dim")?,
+            });
+            model.init_weights(&mut calc::Rng::new(INIT_SEED));
+            Ok(Box::new(model))
+        }
         other => Err(format!(
             "unknown model {:?}. available: {:?}",
             other, AVAILABLE
@@ -31,13 +42,39 @@ pub fn create_model(section: &ModelSection) -> Result<Box<dyn Model>, String> {
 }
 
 fn required(value: Option<usize>, field: &str) -> Result<usize, String> {
-    value.ok_or_else(|| format!("model \"mlp\" requires {field}"))
+    value.ok_or_else(|| format!("model config is missing required field: {field}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::ModelSection;
+
+    #[test]
+    fn attention_from_registry_learns_after_training() {
+        let section = ModelSection {
+            name: "attention".to_string(),
+            vocab_size: 8,
+            context_size: Some(2),
+            embedding_dim: Some(8),
+            hidden_dim: Some(32),
+            num_hidden_layers: None,
+        };
+
+        let mut model = create_model(&section).unwrap();
+        for _ in 0..200 {
+            model.train_step(&[1, 2], 3, 0.5);
+        }
+
+        let logits = model.forward(&[1, 2]);
+        let predicted = logits
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .map(|(i, _)| i)
+            .unwrap();
+        assert_eq!(predicted, 3);
+    }
 
     #[test]
     fn mlp_from_registry_learns_after_training() {

@@ -1,0 +1,14 @@
+[model]
+name = "attention"
+vocab_size = 256
+context_size = 8
+embedding_dim = 32
+hidden_dim = 128
+
+[training]
+corpus = "configs/corpus.txt"
+epochs = 200
+learning_rate = 0.02
+
+[weights]
+path = "target/attention.weights"
