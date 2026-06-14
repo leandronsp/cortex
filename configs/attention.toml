@@ -1,6 +1,6 @@
 [model]
 name = "attention"
-vocab_size = 256
+vocab_size = 257
 context_size = 8
 embedding_dim = 32
 hidden_dim = 128

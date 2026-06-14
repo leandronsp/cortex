@@ -1,6 +1,6 @@
 [model]
 name = "bigram"
-vocab_size = 256
+vocab_size = 257
 
 [training]
 corpus = "configs/corpus.txt"

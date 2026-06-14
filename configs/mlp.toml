@@ -1,6 +1,6 @@
 [model]
 name = "mlp"
-vocab_size = 256
+vocab_size = 257
 context_size = 3
 embedding_dim = 16
 hidden_dim = 64
