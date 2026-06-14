@@ -212,6 +212,22 @@ mod tests {
         assert_eq!(predicted, 97);
     }
 
+    #[test]
+    fn test_bigram_smoke_predicts_target_after_training() {
+        let mut bigram = Bigram::new(8);
+
+        // Inject deterministic pseudo-random weights, then drive training
+        // through the Model interface and check the prediction.
+        let mut rng = crate::training::calc::Rng::new(0x5EED);
+        bigram.set_weights(crate::training::calc::random_matrix(8, 8, 0.1, &mut rng));
+
+        for _ in 0..200 {
+            bigram.train_step(&[1], 2, 0.5);
+        }
+
+        assert_eq!(argmax(&bigram.forward(1)), 2);
+    }
+
     fn argmax(v: &[f32]) -> usize {
         v.iter()
             .enumerate()

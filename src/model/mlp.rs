@@ -474,4 +474,37 @@ mod tests {
 
         assert_eq!(restored.forward(&[1, 2]), expected);
     }
+
+    #[test]
+    fn test_mlp_smoke_predicts_target_after_training() {
+        fn argmax(values: &[f32]) -> usize {
+            values
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .map(|(i, _)| i)
+                .unwrap()
+        }
+
+        let mut mlp = Mlp::new(MlpConfig {
+            vocab_size: 8,
+            context_size: 2,
+            embedding_dim: 4,
+            hidden_dim: 8,
+            num_hidden_layers: 1,
+        });
+
+        // Inject deterministic pseudo-random weights: the model is the engine,
+        // the caller provides the initial state.
+        let mut rng = calc::Rng::new(0x5EED);
+        mlp.embedding = calc::random_matrix(8, 4, 0.1, &mut rng);
+        mlp.hidden_layers[0].weights = calc::random_matrix(8, 8, 0.1, &mut rng);
+        mlp.output_layer.weights = calc::random_matrix(8, 8, 0.1, &mut rng);
+
+        for _ in 0..200 {
+            mlp.train_step(&[1, 2], 3, 0.5);
+        }
+
+        assert_eq!(argmax(&mlp.forward(&[1, 2])), 3);
+    }
 }
