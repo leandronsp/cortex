@@ -35,7 +35,7 @@ fn chat_missing_weights_tells_user_to_train_first() {
         r#"
 [model]
 name = "bigram"
-vocab_size = 256
+vocab_size = 257
 
 [training]
 corpus = "/tmp/whatever"

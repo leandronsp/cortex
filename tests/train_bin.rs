@@ -33,7 +33,7 @@ fn train_writes_weights_from_config() {
         r#"
 [model]
 name = "bigram"
-vocab_size = 256
+vocab_size = 257
 
 [training]
 corpus = "{}"
@@ -75,7 +75,7 @@ fn train_unknown_model_exits_nonzero() {
         r#"
 [model]
 name = "nonexistent"
-vocab_size = 256
+vocab_size = 257
 
 [training]
 corpus = "/tmp/whatever"
@@ -106,7 +106,7 @@ fn train_missing_corpus_exits_nonzero_naming_path() {
         r#"
 [model]
 name = "bigram"
-vocab_size = 256
+vocab_size = 257
 
 [training]
 corpus = "/tmp/cortex-absent-corpus.txt"
