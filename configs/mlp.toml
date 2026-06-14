@@ -1,0 +1,15 @@
+[model]
+name = "mlp"
+vocab_size = 256
+context_size = 3
+embedding_dim = 16
+hidden_dim = 64
+num_hidden_layers = 2
+
+[training]
+corpus = "configs/corpus.txt"
+epochs = 200
+learning_rate = 0.05
+
+[weights]
+path = "target/mlp.weights"
