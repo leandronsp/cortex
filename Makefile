@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help test lint build
+.PHONY: help test test-all lint build
 
 include mk/cortex.mk
 
@@ -12,5 +12,8 @@ build: ## Build library and binaries
 lint: ## Run clippy with warnings as errors
 	@cargo clippy -- -D warnings
 
-test: ## Run all tests
-	@cargo test
+test: ## Run fast unit tests only
+	@cargo test --release --lib
+
+test-all: ## Run all tests including slow E2E
+	@cargo test --release -- --include-ignored

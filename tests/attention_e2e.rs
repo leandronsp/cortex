@@ -3,6 +3,7 @@ use cortex::model::registry::create_model;
 use cortex::Cortex;
 
 #[test]
+#[ignore]
 fn attention_trains_end_to_end_and_generates() {
     let config = Config::from_path("configs/attention.toml").expect("config");
     let model = create_model(&config.model).expect("model");
