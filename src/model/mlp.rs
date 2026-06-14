@@ -50,6 +50,18 @@ impl Mlp {
             output_layer: Layer::new(hidden_dim, vs, Activation::None),
         }
     }
+
+    /// Fill embedding and layer weights with small uniform values. Called by
+    /// the caller (the registry factory), not the constructor: the model is the
+    /// engine, the caller injects the initial state with a seeded rng.
+    pub fn init_weights(&mut self, rng: &mut calc::Rng) {
+        const RANGE: f32 = 0.1;
+        calc::fill_uniform(&mut self.embedding, RANGE, rng);
+        for layer in &mut self.hidden_layers {
+            calc::fill_uniform(&mut layer.weights, RANGE, rng);
+        }
+        calc::fill_uniform(&mut self.output_layer.weights, RANGE, rng);
+    }
 }
 
 fn write_matrix(writer: &mut dyn Write, matrix: &[Vec<f32>]) -> std::io::Result<()> {
@@ -496,10 +508,7 @@ mod tests {
 
         // Inject deterministic pseudo-random weights: the model is the engine,
         // the caller provides the initial state.
-        let mut rng = calc::Rng::new(0x5EED);
-        mlp.embedding = calc::random_matrix(8, 4, 0.1, &mut rng);
-        mlp.hidden_layers[0].weights = calc::random_matrix(8, 8, 0.1, &mut rng);
-        mlp.output_layer.weights = calc::random_matrix(8, 8, 0.1, &mut rng);
+        mlp.init_weights(&mut calc::Rng::new(0x5EED));
 
         for _ in 0..200 {
             mlp.train_step(&[1, 2], 3, 0.5);

@@ -55,10 +55,18 @@ impl Rng {
     }
 }
 
+pub fn fill_uniform(matrix: &mut [Vec<f32>], range: f32, rng: &mut Rng) {
+    for row in matrix {
+        for value in row {
+            *value = rng.uniform(range);
+        }
+    }
+}
+
 pub fn random_matrix(rows: usize, cols: usize, range: f32, rng: &mut Rng) -> Vec<Vec<f32>> {
-    (0..rows)
-        .map(|_| (0..cols).map(|_| rng.uniform(range)).collect())
-        .collect()
+    let mut matrix = vec![vec![0.0; cols]; rows];
+    fill_uniform(&mut matrix, range, rng);
+    matrix
 }
 
 #[cfg(test)]
