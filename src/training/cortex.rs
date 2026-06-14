@@ -22,15 +22,16 @@ impl Cortex {
 
     pub fn train(&mut self, corpus: &str, epochs: usize, learning_rate: f32) -> TrainReport {
         let tokens = self.bpe.encode(corpus);
+        let context_size = self.model.context_size();
         let mut first_avg_loss = 0.0;
         let mut last_avg_loss = 0.0;
         for epoch in 0..epochs {
             let mut total_loss = 0.0;
-            for window in tokens.windows(2) {
-                let target = window[1];
-                total_loss += self.model.train_step(&window[..1], target, learning_rate);
+            for window in tokens.windows(context_size + 1) {
+                let (context, target) = window.split_at(context_size);
+                total_loss += self.model.train_step(context, target[0], learning_rate);
             }
-            let avg = total_loss / (tokens.len().saturating_sub(1)).max(1) as f32;
+            let avg = total_loss / (tokens.len().saturating_sub(context_size)).max(1) as f32;
             if epoch == 0 {
                 first_avg_loss = avg;
             }
@@ -121,6 +122,22 @@ mod tests {
         let mut cortex = make_cortex();
         let report = cortex.train("hello world hello world hello world", 10, 1.0);
         assert!(report.first_avg_loss > report.last_avg_loss);
+    }
+
+    #[test]
+    fn train_handles_multi_token_context_window() {
+        use crate::model::mlp::{Mlp, MlpConfig};
+        let mlp = Mlp::new(MlpConfig {
+            vocab_size: 256,
+            context_size: 3,
+            embedding_dim: 8,
+            hidden_dim: 16,
+            num_hidden_layers: 1,
+        });
+        let mut cortex = Cortex::new(Box::new(mlp));
+        let report = cortex.train("hello world hello world hello world", 5, 0.1);
+        assert_eq!(report.epochs, 5);
+        assert!(report.token_count > 3);
     }
 
     #[test]
