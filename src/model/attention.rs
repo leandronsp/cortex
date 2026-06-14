@@ -36,17 +36,33 @@ pub struct AttentionConfig {
     pub context_size: usize,
     pub embedding_dim: usize,
     pub ffn_hidden: usize,
+    pub num_blocks: usize,
+}
+
+/// Single transformer block: causal self-attention + FFN + residuals.
+#[derive(Clone)]
+struct Block {
+    wq: Vec<Vec<f32>>,
+    wk: Vec<Vec<f32>>,
+    wv: Vec<Vec<f32>>,
+    w1: Vec<Vec<f32>>,
+    w2: Vec<Vec<f32>>,
+}
+
+/// Gradients for a single block, accumulated during backprop.
+struct BlockGrad {
+    wq: Vec<Vec<f32>>,
+    wk: Vec<Vec<f32>>,
+    wv: Vec<Vec<f32>>,
+    w1: Vec<Vec<f32>>,
+    w2: Vec<Vec<f32>>,
 }
 
 pub struct Attention {
     config: AttentionConfig,
     token_embedding: Vec<Vec<f32>>,
     positional_encoding: Vec<Vec<f32>>,
-    wq: Vec<Vec<f32>>,
-    wk: Vec<Vec<f32>>,
-    wv: Vec<Vec<f32>>,
-    w1: Vec<Vec<f32>>,
-    w2: Vec<Vec<f32>>,
+    blocks: Vec<Block>,
     wo: Vec<Vec<f32>>,
 }
 
@@ -67,15 +83,20 @@ impl Attention {
             }
         }
 
-        Self {
-            config,
-            token_embedding: vec![vec![0.0; d]; vocab],
-            positional_encoding,
+        let block = Block {
             wq: vec![vec![0.0; d]; d],
             wk: vec![vec![0.0; d]; d],
             wv: vec![vec![0.0; d]; d],
             w1: vec![vec![0.0; d]; f],
             w2: vec![vec![0.0; f]; d],
+        };
+        let blocks = vec![block; config.num_blocks];
+
+        Self {
+            config,
+            token_embedding: vec![vec![0.0; d]; vocab],
+            positional_encoding,
+            blocks,
             wo: vec![vec![0.0; d]; vocab],
         }
     }
@@ -86,11 +107,13 @@ impl Attention {
     pub fn init_weights(&mut self, rng: &mut calc::Rng) {
         const RANGE: f32 = 0.1;
         calc::fill_uniform(&mut self.token_embedding, RANGE, rng);
-        calc::fill_uniform(&mut self.wq, RANGE, rng);
-        calc::fill_uniform(&mut self.wk, RANGE, rng);
-        calc::fill_uniform(&mut self.wv, RANGE, rng);
-        calc::fill_uniform(&mut self.w1, RANGE, rng);
-        calc::fill_uniform(&mut self.w2, RANGE, rng);
+        for block in &mut self.blocks {
+            calc::fill_uniform(&mut block.wq, RANGE, rng);
+            calc::fill_uniform(&mut block.wk, RANGE, rng);
+            calc::fill_uniform(&mut block.wv, RANGE, rng);
+            calc::fill_uniform(&mut block.w1, RANGE, rng);
+            calc::fill_uniform(&mut block.w2, RANGE, rng);
+        }
         calc::fill_uniform(&mut self.wo, RANGE, rng);
     }
 }
@@ -155,25 +178,29 @@ impl Model for Attention {
             })
             .collect();
 
-        // --- Self-attention (query at the last position only) ---
-        let q = matvec(&self.wq, &x[t]);
-        let k: Vec<Vec<f32>> = x.iter().map(|xi| matvec(&self.wk, xi)).collect();
-        let v: Vec<Vec<f32>> = x.iter().map(|xi| matvec(&self.wv, xi)).collect();
         let scale = (d as f32).sqrt();
-        let scores: Vec<f32> = k.iter().map(|kj| dot(&q, kj) / scale).collect();
-        let weights = calc::softmax(&scores);
-        let mut attended = vec![0.0; d];
-        for (j, vj) in v.iter().enumerate() {
-            for a in 0..d {
-                attended[a] += weights[j] * vj[a];
-            }
-        }
+        let mut h = x[t].clone();
 
-        // --- Residual 1 + FFN + Residual 2 ---
-        let a: Vec<f32> = (0..d).map(|c| x[t][c] + attended[c]).collect();
-        let act = calc::relu_vec(&matvec(&self.w1, &a));
-        let ffn_out = matvec(&self.w2, &act);
-        let h: Vec<f32> = (0..d).map(|c| a[c] + ffn_out[c]).collect();
+        for block in &self.blocks {
+            // --- Self-attention (query at the last position only) ---
+            let q = matvec(&block.wq, &h);
+            let k: Vec<Vec<f32>> = x.iter().map(|xi| matvec(&block.wk, xi)).collect();
+            let v: Vec<Vec<f32>> = x.iter().map(|xi| matvec(&block.wv, xi)).collect();
+            let scores: Vec<f32> = k.iter().map(|kj| dot(&q, kj) / scale).collect();
+            let weights = calc::softmax(&scores);
+            let mut attended = vec![0.0; d];
+            for (j, vj) in v.iter().enumerate() {
+                for a in 0..d {
+                    attended[a] += weights[j] * vj[a];
+                }
+            }
+
+            // --- Residual 1 + FFN + Residual 2 ---
+            let a: Vec<f32> = (0..d).map(|c| h[c] + attended[c]).collect();
+            let act = calc::relu_vec(&matvec(&block.w1, &a));
+            let ffn_out = matvec(&block.w2, &act);
+            h = (0..d).map(|c| a[c] + ffn_out[c]).collect();
+        }
 
         matvec(&self.wo, &h)
     }
@@ -194,22 +221,52 @@ impl Model for Attention {
                 (0..d).map(|b| emb[b] + pe[b]).collect()
             })
             .collect();
-        let q = matvec(&self.wq, &x[t]);
-        let k: Vec<Vec<f32>> = x.iter().map(|xi| matvec(&self.wk, xi)).collect();
-        let v: Vec<Vec<f32>> = x.iter().map(|xi| matvec(&self.wv, xi)).collect();
-        let scores: Vec<f32> = k.iter().map(|kj| dot(&q, kj) / scale).collect();
-        let weights = calc::softmax(&scores);
-        let mut attended = vec![0.0; d];
-        for (j, vj) in v.iter().enumerate() {
-            for a in 0..d {
-                attended[a] += weights[j] * vj[a];
-            }
+
+        // Per-block cached values for backprop.
+        struct BlockCache {
+            h_input: Vec<f32>, // block input (x[t] for first block, previous block output otherwise)
+            q: Vec<f32>,
+            k: Vec<Vec<f32>>,
+            v: Vec<Vec<f32>>,
+            attn_weights: Vec<f32>,
+            a: Vec<f32>,  // attention residual
+            pre: Vec<f32>,
+            act: Vec<f32>,
         }
-        let a: Vec<f32> = (0..d).map(|c| x[t][c] + attended[c]).collect();
-        let pre = matvec(&self.w1, &a);
-        let act = calc::relu_vec(&pre);
-        let ffn_out = matvec(&self.w2, &act);
-        let h: Vec<f32> = (0..d).map(|c| a[c] + ffn_out[c]).collect();
+
+        let mut block_caches = Vec::with_capacity(self.blocks.len());
+        let mut h = x[t].clone();
+        for block in &self.blocks {
+            let h_input = h.clone();
+            let q = matvec(&block.wq, &h);
+            let k: Vec<Vec<f32>> = x.iter().map(|xi| matvec(&block.wk, xi)).collect();
+            let v: Vec<Vec<f32>> = x.iter().map(|xi| matvec(&block.wv, xi)).collect();
+            let scores: Vec<f32> = k.iter().map(|kj| dot(&q, kj) / scale).collect();
+            let weights = calc::softmax(&scores);
+            let mut attended = vec![0.0; d];
+            for (j, vj) in v.iter().enumerate() {
+                for a in 0..d {
+                    attended[a] += weights[j] * vj[a];
+                }
+            }
+            let a: Vec<f32> = (0..d).map(|c| h[c] + attended[c]).collect();
+            let pre = matvec(&block.w1, &a);
+            let act = calc::relu_vec(&pre);
+            let ffn_out = matvec(&block.w2, &act);
+            let block_h: Vec<f32> = (0..d).map(|c| a[c] + ffn_out[c]).collect();
+            block_caches.push(BlockCache {
+                h_input,
+                q,
+                k,
+                v,
+                attn_weights: weights,
+                a,
+                pre,
+                act,
+            });
+            h = block_h;
+        }
+
         let logits = matvec(&self.wo, &h);
         let probs = calc::softmax(&logits);
         let loss = calc::cross_entropy_loss(&probs, target as usize);
@@ -217,7 +274,7 @@ impl Model for Attention {
         // ----------------------- BACKWARD ------------------------------------
         let d_logits = calc::cross_entropy_gradient(&probs, target as usize);
 
-        // logits = Wo . h
+        // logits = Wo . h (final)
         let mut d_wo = vec![vec![0.0; d]; vocab];
         let mut d_h = vec![0.0; d];
         for (vi, row) in self.wo.iter().enumerate() {
@@ -227,89 +284,98 @@ impl Model for Attention {
             }
         }
 
-        // h = a + ffn_out
-        let mut d_a = d_h.clone();
-        let d_ffn_out = d_h;
-
-        // ffn_out = W2 . act
-        let mut d_w2 = vec![vec![0.0; f]; d];
-        let mut d_act = vec![0.0; f];
-        for (c, row) in self.w2.iter().enumerate() {
-            for m in 0..f {
-                d_w2[c][m] = d_ffn_out[c] * act[m];
-                d_act[m] += row[m] * d_ffn_out[c];
-            }
-        }
-        // act = relu(pre)
-        let d_pre: Vec<f32> = (0..f)
-            .map(|m| if pre[m] > 0.0 { d_act[m] } else { 0.0 })
-            .collect();
-        // pre = W1 . a
-        let mut d_w1 = vec![vec![0.0; d]; f];
-        for (m, row) in self.w1.iter().enumerate() {
-            for c in 0..d {
-                d_w1[m][c] = d_pre[m] * a[c];
-                d_a[c] += row[c] * d_pre[m];
-            }
-        }
-
-        // a = X[t] + attended
+        // Per-block gradients, accumulated from last block to first.
         let mut d_x = vec![vec![0.0; d]; n];
-        for c in 0..d {
-            d_x[t][c] += d_a[c];
-        }
-        let d_attended = d_a;
+        let mut d_embedding = vec![vec![0.0; d]; vocab];
+        let mut block_grads: Vec<BlockGrad> = Vec::with_capacity(self.blocks.len());
 
-        // attended = sum_j weights[j] * V[j]
-        let mut d_weights = vec![0.0; n];
-        let mut d_v = vec![vec![0.0; d]; n];
-        for j in 0..n {
-            for c in 0..d {
-                d_weights[j] += d_attended[c] * v[j][c];
-                d_v[j][c] = weights[j] * d_attended[c];
-            }
-        }
+        for (i, block) in self.blocks.iter().enumerate().rev() {
+            let cache = &block_caches[i];
 
-        // Softmax over scores
-        let weighted_sum: f32 = (0..n).map(|kk| weights[kk] * d_weights[kk]).sum();
-        let d_scores: Vec<f32> = (0..n)
-            .map(|j| weights[j] * (d_weights[j] - weighted_sum))
-            .collect();
+            // h = a + ffn_out  =>  d_a = d_h + d_ffn_out  (but d_ffn_out = d_h because residual adds same d_h)
+            let mut d_a = d_h.clone();
+            let d_ffn_out = &d_h;
 
-        // scores[j] = (Q . K[j]) / sqrt(d)
-        let mut d_q = vec![0.0; d];
-        let mut d_k = vec![vec![0.0; d]; n];
-        for j in 0..n {
-            for c in 0..d {
-                d_q[c] += d_scores[j] * k[j][c] / scale;
-                d_k[j][c] = d_scores[j] * q[c] / scale;
-            }
-        }
-
-        // Q = Wq . X[t]
-        let mut d_wq = vec![vec![0.0; d]; d];
-        for c in 0..d {
-            for b in 0..d {
-                d_wq[c][b] += d_q[c] * x[t][b];
-                d_x[t][b] += self.wq[c][b] * d_q[c];
-            }
-        }
-        // K[j] = Wk . X[j], V[j] = Wv . X[j]
-        let mut d_wk = vec![vec![0.0; d]; d];
-        let mut d_wv = vec![vec![0.0; d]; d];
-        for j in 0..n {
-            for c in 0..d {
-                for b in 0..d {
-                    d_wk[c][b] += d_k[j][c] * x[j][b];
-                    d_x[j][b] += self.wk[c][b] * d_k[j][c];
-                    d_wv[c][b] += d_v[j][c] * x[j][b];
-                    d_x[j][b] += self.wv[c][b] * d_v[j][c];
+            // ffn_out = W2 . act
+            let mut d_w2 = vec![vec![0.0; f]; d];
+            let mut d_act = vec![0.0; f];
+            for (c, row) in block.w2.iter().enumerate() {
+                for m in 0..f {
+                    d_w2[c][m] = d_ffn_out[c] * cache.act[m];
+                    d_act[m] += row[m] * d_ffn_out[c];
                 }
             }
+            // act = relu(pre)
+            let d_pre: Vec<f32> = (0..f)
+                .map(|m| if cache.pre[m] > 0.0 { d_act[m] } else { 0.0 })
+                .collect();
+            // pre = W1 . a
+            let mut d_w1 = vec![vec![0.0; d]; f];
+            for (m, row) in block.w1.iter().enumerate() {
+                for c in 0..d {
+                    d_w1[m][c] = d_pre[m] * cache.a[c];
+                    d_a[c] += row[c] * d_pre[m];
+                }
+            }
+
+            // a = h_prev + attended  (h_prev = x[t] for first block, or previous block output)
+            let d_attended = d_a.clone();
+
+            // attended = sum_j weights[j] * V[j]
+            let mut d_weights = vec![0.0; n];
+            let mut d_v = vec![vec![0.0; d]; n];
+            for j in 0..n {
+                for c in 0..d {
+                    d_weights[j] += d_attended[c] * cache.v[j][c];
+                    d_v[j][c] = cache.attn_weights[j] * d_attended[c];
+                }
+            }
+
+            // Softmax backward
+            let weighted_sum: f32 = (0..n).map(|kk| cache.attn_weights[kk] * d_weights[kk]).sum();
+            let d_scores: Vec<f32> = (0..n)
+                .map(|j| cache.attn_weights[j] * (d_weights[j] - weighted_sum))
+                .collect();
+
+            // scores[j] = (Q . K[j]) / sqrt(d)
+            let mut d_q = vec![0.0; d];
+            let mut d_k = vec![vec![0.0; d]; n];
+                for j in 0..n {
+                for c in 0..d {
+                    d_q[c] += d_scores[j] * cache.k[j][c] / scale;
+                    d_k[j][c] = d_scores[j] * cache.q[c] / scale;
+                }
+            }
+
+            // Q = Wq . h_input
+            let mut d_wq = vec![vec![0.0; d]; d];
+            #[allow(clippy::needless_range_loop)]
+            for c in 0..d {
+                for b in 0..d {
+                    d_wq[c][b] += d_q[c] * cache.h_input[b];
+                }
+            }
+            // K[j] = Wk . X[j], V[j] = Wv . X[j]
+            let mut d_wk = vec![vec![0.0; d]; d];
+            let mut d_wv = vec![vec![0.0; d]; d];
+            for j in 0..n {
+                for c in 0..d {
+                    for b in 0..d {
+                        d_wk[c][b] += d_k[j][c] * x[j][b];
+                        d_x[j][b] += block.wk[c][b] * d_k[j][c];
+                        d_wv[c][b] += d_v[j][c] * x[j][b];
+                        d_x[j][b] += block.wv[c][b] * d_v[j][c];
+                    }
+                }
+            }
+
+            block_grads.push(BlockGrad { wq: d_wq, wk: d_wk, wv: d_wv, w1: d_w1, w2: d_w2 });
+
+            // Gradient for the residual: d_h = d_a propagates to the next (earlier) block
+            d_h = d_a;
         }
 
-        // X[i] = token_embedding[ctx[i]] + PE[i]
-        let mut d_embedding = vec![vec![0.0; d]; vocab];
+        // Accumulate gradients from blocks into d_embedding
         for (i, &token) in context.iter().enumerate() {
             for b in 0..d {
                 d_embedding[token as usize][b] += d_x[i][b];
@@ -317,11 +383,15 @@ impl Model for Attention {
         }
 
         // ----------------------- SGD UPDATE ----------------------------------
-        update(&mut self.wq, &d_wq, learning_rate);
-        update(&mut self.wk, &d_wk, learning_rate);
-        update(&mut self.wv, &d_wv, learning_rate);
-        update(&mut self.w1, &d_w1, learning_rate);
-        update(&mut self.w2, &d_w2, learning_rate);
+        // Block gradients were pushed in reverse order; reverse to match blocks.
+        block_grads.reverse();
+        for (block, grads) in self.blocks.iter_mut().zip(block_grads) {
+            update(&mut block.wq, &grads.wq, learning_rate);
+            update(&mut block.wk, &grads.wk, learning_rate);
+            update(&mut block.wv, &grads.wv, learning_rate);
+            update(&mut block.w1, &grads.w1, learning_rate);
+            update(&mut block.w2, &grads.w2, learning_rate);
+        }
         update(&mut self.wo, &d_wo, learning_rate);
         for token in context.iter().copied().collect::<HashSet<u16>>() {
             for (w, g) in self.token_embedding[token as usize]
@@ -337,21 +407,25 @@ impl Model for Attention {
 
     fn save(&self, writer: &mut dyn Write) -> std::io::Result<()> {
         write_matrix(writer, &self.token_embedding)?;
-        write_matrix(writer, &self.wq)?;
-        write_matrix(writer, &self.wk)?;
-        write_matrix(writer, &self.wv)?;
-        write_matrix(writer, &self.w1)?;
-        write_matrix(writer, &self.w2)?;
+        for block in &self.blocks {
+            write_matrix(writer, &block.wq)?;
+            write_matrix(writer, &block.wk)?;
+            write_matrix(writer, &block.wv)?;
+            write_matrix(writer, &block.w1)?;
+            write_matrix(writer, &block.w2)?;
+        }
         write_matrix(writer, &self.wo)
     }
 
     fn load(&mut self, reader: &mut dyn Read) -> std::io::Result<()> {
         read_matrix(reader, &mut self.token_embedding)?;
-        read_matrix(reader, &mut self.wq)?;
-        read_matrix(reader, &mut self.wk)?;
-        read_matrix(reader, &mut self.wv)?;
-        read_matrix(reader, &mut self.w1)?;
-        read_matrix(reader, &mut self.w2)?;
+        for block in &mut self.blocks {
+            read_matrix(reader, &mut block.wq)?;
+            read_matrix(reader, &mut block.wk)?;
+            read_matrix(reader, &mut block.wv)?;
+            read_matrix(reader, &mut block.w1)?;
+            read_matrix(reader, &mut block.w2)?;
+        }
         read_matrix(reader, &mut self.wo)
     }
 }
@@ -376,6 +450,7 @@ mod tests {
             context_size: 2,
             embedding_dim: 2,
             ffn_hidden: 4,
+            num_blocks: 1,
         });
 
         // Zero PE so the hand computation is clean. w1/w2 stay zero (from `new`),
@@ -391,7 +466,7 @@ mod tests {
         // attended = avg([1,0], [0,1]) = [0.5, 0.5].
         // Residual 1: a = X[t] + attended = [0,1] + [0.5,0.5] = [0.5, 1.5].
         // FFN is zero, so h = a. logits = wo . [0.5, 1.5].
-        model.wv = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        model.blocks[0].wv = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
         model.wo = vec![
             vec![1.0, 0.0],
             vec![0.0, 1.0],
@@ -410,6 +485,7 @@ mod tests {
             context_size: 2,
             embedding_dim: 8,
             ffn_hidden: 32,
+            num_blocks: 1,
         });
 
         model.init_weights(&mut calc::Rng::new(0x5EED));
@@ -422,12 +498,28 @@ mod tests {
     }
 
     #[test]
+    fn test_attention_two_blocks_forward_produces_logits() {
+        let mut model = Attention::new(AttentionConfig {
+            vocab_size: 8,
+            context_size: 2,
+            embedding_dim: 8,
+            ffn_hidden: 32,
+            num_blocks: 2,
+        });
+        model.init_weights(&mut calc::Rng::new(0x5EED));
+
+        let logits = model.forward(&[1, 2]);
+        assert_eq!(logits.len(), 8, "two-block forward must produce vocab_size logits");
+    }
+
+    #[test]
     fn test_attention_save_load_round_trip_preserves_forward() {
         let config = AttentionConfig {
             vocab_size: 8,
             context_size: 3,
             embedding_dim: 4,
             ffn_hidden: 16,
+            num_blocks: 1,
         };
 
         let mut source = Attention::new(config.clone());

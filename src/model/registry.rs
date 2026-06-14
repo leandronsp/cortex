@@ -25,11 +25,15 @@ pub fn create_model(section: &ModelSection) -> Result<Box<dyn Model>, String> {
             Ok(Box::new(mlp))
         }
         "attention" => {
+            let num_blocks = section.num_hidden_layers.ok_or_else(|| {
+                "model config is missing required field: num_hidden_layers (used as num_blocks for attention)".to_string()
+            })?;
             let mut model = Attention::new(AttentionConfig {
                 vocab_size: section.vocab_size,
                 context_size: required(section.context_size, "context_size")?,
                 embedding_dim: required(section.embedding_dim, "embedding_dim")?,
                 ffn_hidden: required(section.hidden_dim, "hidden_dim")?,
+                num_blocks,
             });
             model.init_weights(&mut calc::Rng::new(INIT_SEED));
             Ok(Box::new(model))
@@ -58,7 +62,7 @@ mod tests {
             context_size: Some(2),
             embedding_dim: Some(8),
             hidden_dim: Some(32),
-            num_hidden_layers: None,
+            num_hidden_layers: Some(1),
         };
 
         let mut model = create_model(&section).unwrap();

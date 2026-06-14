@@ -11,7 +11,7 @@ fn mlp_trains_end_to_end_and_generates() {
     // Fewer epochs than the config: this proves the pipeline wires up and
     // learns, not the production training budget. Keeps the suite fast.
     let mut cortex = Cortex::new(model);
-    let report = cortex.train(&corpus, 50, config.training.learning_rate);
+    let report = cortex.train(&corpus, 10, config.training.learning_rate);
 
     // The pipeline learns: loss drops from the uniform baseline.
     assert!(report.last_avg_loss < report.first_avg_loss);

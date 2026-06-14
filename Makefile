@@ -13,4 +13,4 @@ lint: ## Run clippy with warnings as errors
 	@cargo clippy -- -D warnings
 
 test: ## Run all tests
-	@cargo test
+	@cargo test --release
