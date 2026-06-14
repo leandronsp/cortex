@@ -74,7 +74,7 @@ fn train_unknown_model_exits_nonzero() {
         &config_path,
         r#"
 [model]
-name = "mlp"
+name = "nonexistent"
 vocab_size = 256
 
 [training]
