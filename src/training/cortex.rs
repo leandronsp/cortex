@@ -111,68 +111,94 @@ fn argmax(values: &[f32]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::bigram::Bigram;
+    use crate::model::Model;
+    use std::io::{Read, Write};
 
-    fn make_cortex() -> Cortex {
-        Cortex::new(Box::new(Bigram::new(256)))
+    /// Minimal Model double. Cortex is tested against the interface, never a
+    /// concrete model: `forward` predicts `last + 1` for deterministic decode,
+    /// and `train_step` returns the context length so the average reveals the
+    /// window size Cortex sliced out.
+    struct FakeModel {
+        context_size: usize,
+        steps: f32,
     }
 
-    #[test]
-    fn train_reduces_average_loss() {
-        let mut cortex = make_cortex();
-        let report = cortex.train("hello world hello world hello world", 10, 1.0);
-        assert!(report.first_avg_loss > report.last_avg_loss);
+    impl FakeModel {
+        fn new(context_size: usize) -> Self {
+            Self {
+                context_size,
+                steps: 0.0,
+            }
+        }
     }
 
-    #[test]
-    fn train_handles_multi_token_context_window() {
-        use crate::model::mlp::{Mlp, MlpConfig};
-        let mlp = Mlp::new(MlpConfig {
-            vocab_size: 256,
-            context_size: 3,
-            embedding_dim: 8,
-            hidden_dim: 16,
-            num_hidden_layers: 1,
-        });
-        let mut cortex = Cortex::new(Box::new(mlp));
-        let report = cortex.train("hello world hello world hello world", 5, 0.1);
-        assert_eq!(report.epochs, 5);
-        assert!(report.token_count > 3);
-    }
+    impl Model for FakeModel {
+        fn vocab_size(&self) -> u16 {
+            256
+        }
 
-    #[test]
-    fn generate_caps_at_max_tokens() {
-        let mut cortex = make_cortex();
-        cortex.train("abcabcabc", 20, 1.0);
-        let out = cortex.generate("a", 5);
-        assert!(out.chars().count() <= 5);
-    }
+        fn context_size(&self) -> usize {
+            self.context_size
+        }
 
-    #[test]
-    fn generate_stops_on_newline() {
-        let mut cortex = make_cortex();
-        cortex.train("hi\n", 100, 1.0);
-        let out = cortex.generate("h", 100);
-        assert!(
-            out.ends_with('\n') || out.chars().count() == 100,
-            "got: {:?}",
-            out
-        );
-        if out.ends_with('\n') {
-            assert!(out.chars().count() < 100);
+        fn forward(&self, context: &[u16]) -> Vec<f32> {
+            let next = context.last().copied().unwrap_or(0).wrapping_add(1);
+            let mut logits = vec![0.0; 256];
+            logits[next as usize] = 1.0;
+            logits
+        }
+
+        fn train_step(&mut self, context: &[u16], _target: u16, _learning_rate: f32) -> f32 {
+            self.steps += 1.0;
+            context.len() as f32
+        }
+
+        fn save(&self, writer: &mut dyn Write) -> std::io::Result<()> {
+            writer.write_all(&self.steps.to_le_bytes())
+        }
+
+        fn load(&mut self, reader: &mut dyn Read) -> std::io::Result<()> {
+            let mut buf = [0u8; 4];
+            reader.read_exact(&mut buf)?;
+            self.steps = f32::from_le_bytes(buf);
+            Ok(())
         }
     }
 
     #[test]
+    fn train_feeds_context_size_window_to_model() {
+        let mut cortex = Cortex::new(Box::new(FakeModel::new(3)));
+        let report = cortex.train("hello world hello world", 1, 1.0);
+        // Each window's loss is its context length, so the average equals the
+        // window size Cortex fed the model.
+        assert_eq!(report.first_avg_loss, 3.0);
+    }
+
+    #[test]
+    fn generate_caps_at_max_tokens() {
+        let cortex = Cortex::new(Box::new(FakeModel::new(1)));
+        let out = cortex.generate("a", 5);
+        assert_eq!(out.chars().count(), 5);
+    }
+
+    #[test]
+    fn generate_stops_on_newline() {
+        // '\t' (9) makes the model predict '\n' (10), which halts decoding.
+        let cortex = Cortex::new(Box::new(FakeModel::new(1)));
+        let out = cortex.generate("\t", 100);
+        assert_eq!(out, "\n");
+    }
+
+    #[test]
     fn save_load_round_trip_preserves_generation() {
-        let mut source = make_cortex();
-        source.train("the quick brown fox", 30, 1.0);
+        let mut source = Cortex::new(Box::new(FakeModel::new(1)));
+        source.train("the quick brown fox", 3, 1.0);
         let expected = source.generate("t", 8);
 
         let mut buf: Vec<u8> = Vec::new();
         source.save(&mut buf).unwrap();
 
-        let mut restored = Cortex::new(Box::new(Bigram::new(256)));
+        let mut restored = Cortex::new(Box::new(FakeModel::new(1)));
         restored.load(&mut buf.as_slice()).unwrap();
 
         assert_eq!(restored.generate("t", 8), expected);
