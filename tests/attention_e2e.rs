@@ -18,6 +18,11 @@ fn attention_trains_end_to_end_and_generates() {
     // "question". Attention (window 8) can look back to "over the" and should
     // stay on the dog sentence.
     let out = cortex.generate("the quick brown fox jumps over the", 12);
-    assert!(!out.is_empty());
-    eprintln!("ATTENTION GENERATED: {out:?}");
+    assert_eq!(out, " lazy dog\n");
+
+    // Short prompts used to be left-padded with the unseen token 0, which made
+    // the model hallucinate. With BOS padding the model should continue from
+    // the prompt using a learned start-of-sequence signal.
+    let lazy_out = cortex.generate("lazy", 12);
+    assert_eq!(lazy_out, " dog\n");
 }
