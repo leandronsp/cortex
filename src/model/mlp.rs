@@ -52,6 +52,26 @@ impl Mlp {
     }
 }
 
+fn write_matrix(writer: &mut dyn Write, matrix: &[Vec<f32>]) -> std::io::Result<()> {
+    for row in matrix {
+        for &value in row {
+            writer.write_all(&value.to_le_bytes())?;
+        }
+    }
+    Ok(())
+}
+
+fn read_matrix(reader: &mut dyn Read, matrix: &mut [Vec<f32>]) -> std::io::Result<()> {
+    let mut buf = [0u8; 4];
+    for row in matrix.iter_mut() {
+        for value in row.iter_mut() {
+            reader.read_exact(&mut buf)?;
+            *value = f32::from_le_bytes(buf);
+        }
+    }
+    Ok(())
+}
+
 impl Model for Mlp {
     fn vocab_size(&self) -> u16 {
         self.config.vocab_size
@@ -258,12 +278,20 @@ impl Model for Mlp {
         loss
     }
 
-    fn save(&self, _writer: &mut dyn Write) -> std::io::Result<()> {
-        todo!()
+    fn save(&self, writer: &mut dyn Write) -> std::io::Result<()> {
+        write_matrix(writer, &self.embedding)?;
+        for layer in &self.hidden_layers {
+            write_matrix(writer, &layer.weights)?;
+        }
+        write_matrix(writer, &self.output_layer.weights)
     }
 
-    fn load(&mut self, _reader: &mut dyn Read) -> std::io::Result<()> {
-        todo!()
+    fn load(&mut self, reader: &mut dyn Read) -> std::io::Result<()> {
+        read_matrix(reader, &mut self.embedding)?;
+        for layer in &mut self.hidden_layers {
+            read_matrix(reader, &mut layer.weights)?;
+        }
+        read_matrix(reader, &mut self.output_layer.weights)
     }
 }
 
@@ -399,7 +427,51 @@ mod tests {
 
         mlp.train_step(&[0, 0], 1, 1.0);
 
-        eprintln!("DEBUG emb[0][0] = {}", mlp.embedding[0][0]);
         assert!((mlp.embedding[0][0] - (-0.7616)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn test_mlp_save_load_round_trip_preserves_forward() {
+        let config = MlpConfig {
+            vocab_size: 4,
+            context_size: 2,
+            embedding_dim: 2,
+            hidden_dim: 3,
+            num_hidden_layers: 2,
+        };
+
+        let mut source = Mlp::new(config.clone());
+        source.embedding = vec![
+            vec![0.1, 0.2],
+            vec![0.3, 0.4],
+            vec![0.5, 0.6],
+            vec![0.7, 0.8],
+        ];
+        source.hidden_layers[0].weights = vec![
+            vec![0.1, 0.2, 0.3, 0.4],
+            vec![0.5, 0.6, 0.7, 0.8],
+            vec![0.9, 1.0, 1.1, 1.2],
+        ];
+        source.hidden_layers[1].weights = vec![
+            vec![0.1, 0.2, 0.3],
+            vec![0.4, 0.5, 0.6],
+            vec![0.7, 0.8, 0.9],
+        ];
+        source.output_layer.weights = vec![
+            vec![0.1, 0.2, 0.3],
+            vec![0.4, 0.5, 0.6],
+            vec![0.7, 0.8, 0.9],
+            vec![1.0, 1.1, 1.2],
+        ];
+
+        let expected = source.forward(&[1, 2]);
+
+        let mut buf: Vec<u8> = Vec::new();
+        source.save(&mut buf).unwrap();
+
+        let mut restored = Mlp::new(config);
+        restored.load(&mut buf.as_slice()).unwrap();
+
+        assert_eq!(restored.forward(&[1, 2]), expected);
     }
 }
