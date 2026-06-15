@@ -40,24 +40,26 @@ Tudo rápido.
 ENTREGÁVEL FINAL: ao terminar, escreva um relatório em ./RUN-REPORT.md com este
 schema EXATO. Só fatos verificáveis, sem auto-avaliação e sem auto-elogio.
 
-  ## Teste lento
-  - Arquivo que era o E2E lento: <qual>
-  - Tempo de `make test` antes: <s> | depois: <s>
-  - Como separei rápidos x lentos: <mecanismo exato>
-  - Comando pra rodar só os rápidos: <comando>
+```
+## Teste lento
+- Arquivo que era o E2E lento: <qual>
+- Tempo de `make test` antes: <s> | depois: <s>
+- Como separei rápidos x lentos: <mecanismo exato>
+- Comando pra rodar só os rápidos: <comando>
 
-  ## Mudanças
-  - Arquivos alterados (não comitados): <lista>
-  - O que mudou e por quê: <bullets curtos>
+## Mudanças
+- Arquivos alterados (não comitados): <lista>
+- O que mudou e por quê: <bullets curtos>
 
-  ## Treino + validação
-  - Hiperparâmetros 2 blocos: num_hidden_layers=2, learning_rate=<v>, epochs=<v>
-  - Geração que EU testei via terminal-use (prompts curtos E longos): <prompt → saída real>
-  - Funcional? <sim/não, honesto, com a evidência dos prompts variados>
+## Treino + validação
+- Hiperparâmetros 2 blocos: num_hidden_layers=2, learning_rate=<v>, epochs=<v>
+- Geração que EU testei via terminal-use (prompts curtos E longos): <prompt → saída real>
+- Funcional? <sim/não, honesto, com a evidência dos prompts variados>
 
-  ## Disciplina
-  - RED-GREEN: <qual teste falhou primeiro, por quê, antes do fix>
-  - Confirmo que NÃO fiz `git add` nem `git commit`, e que fiquei só nesta worktree.
+## Disciplina
+- RED-GREEN: <qual teste falhou primeiro, por quê, antes do fix>
+- Confirmo que NÃO fiz `git add` nem `git commit`, e que fiquei só nesta worktree.
+```
 
 Comece confirmando em 2-3 linhas que leu o handoff e as regras. Depois o plano e o
 primeiro baby step. Ao final, escreva o RUN-REPORT.md e pare. Sem resumo de fechamento.
