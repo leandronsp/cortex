@@ -1,0 +1,4 @@
+8943017d4ddcb9aeb47e7dd1d61143d82a41f145 refs/heads/eval/deepseek-v4-pro
+0f56323d5622aa29f586a3b3498fb11bba2732c9 refs/heads/eval/glm-5.1
+4ab27c67d4a6651db37db18aa816967f2bb52a74 refs/heads/eval/mimo-v2.5-pro
+9c25d6d885bce73907bdd296afe1ab4ce657a3cc refs/heads/eval/minimax-m3
