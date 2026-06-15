@@ -30,6 +30,7 @@ pub fn create_model(section: &ModelSection) -> Result<Box<dyn Model>, String> {
                 context_size: required(section.context_size, "context_size")?,
                 embedding_dim: required(section.embedding_dim, "embedding_dim")?,
                 ffn_hidden: required(section.hidden_dim, "hidden_dim")?,
+                num_blocks: required(section.num_hidden_layers, "num_hidden_layers")?,
             });
             model.init_weights(&mut calc::Rng::new(INIT_SEED));
             Ok(Box::new(model))
@@ -58,7 +59,7 @@ mod tests {
             context_size: Some(2),
             embedding_dim: Some(8),
             hidden_dim: Some(32),
-            num_hidden_layers: None,
+            num_hidden_layers: Some(1),
         };
 
         let mut model = create_model(&section).unwrap();
@@ -74,6 +75,51 @@ mod tests {
             .map(|(i, _)| i)
             .unwrap();
         assert_eq!(predicted, 3);
+    }
+
+    #[test]
+    fn attention_registry_honors_num_hidden_layers() {
+        let section_1 = ModelSection {
+            name: "attention".to_string(),
+            vocab_size: 8,
+            context_size: Some(2),
+            embedding_dim: Some(8),
+            hidden_dim: Some(32),
+            num_hidden_layers: Some(1),
+        };
+        let section_2 = ModelSection {
+            name: "attention".to_string(),
+            vocab_size: 8,
+            context_size: Some(2),
+            embedding_dim: Some(8),
+            hidden_dim: Some(32),
+            num_hidden_layers: Some(2),
+        };
+
+        let model_1 = create_model(&section_1).unwrap();
+        let model_2 = create_model(&section_2).unwrap();
+
+        let out_1 = model_1.forward(&[1, 2]);
+        let out_2 = model_2.forward(&[1, 2]);
+
+        assert_ne!(out_1, out_2, "num_hidden_layers should change the model");
+    }
+
+    #[test]
+    fn attention_missing_num_hidden_layers_errors_naming_field() {
+        let section = ModelSection {
+            name: "attention".to_string(),
+            vocab_size: 8,
+            context_size: Some(2),
+            embedding_dim: Some(8),
+            hidden_dim: Some(32),
+            num_hidden_layers: None,
+        };
+        let err = match create_model(&section) {
+            Ok(_) => panic!("expected error"),
+            Err(e) => e,
+        };
+        assert!(err.contains("num_hidden_layers"));
     }
 
     #[test]

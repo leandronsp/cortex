@@ -2,7 +2,10 @@ use cortex::config::Config;
 use cortex::model::registry::create_model;
 use cortex::Cortex;
 
+// E2E: trains 50 epochs of the MLP on the corpus. Lumped with the slow
+// integration bucket for consistency; run via `make test-slow` (release).
 #[test]
+#[ignore]
 fn mlp_trains_end_to_end_and_generates() {
     let config = Config::from_path("configs/mlp.toml").expect("config");
     let model = create_model(&config.model).expect("model");

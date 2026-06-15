@@ -74,6 +74,45 @@ pub fn random_matrix(rows: usize, cols: usize, range: f32, rng: &mut Rng) -> Vec
     matrix
 }
 
+/// Cap the L2 norm of a gradient matrix in place. If the norm is already
+/// under `max_norm`, leaves the values untouched. Used to keep transformer
+/// training stable when a single batch produces an outsized gradient.
+pub fn clip_matrix_norm(m: &mut [Vec<f32>], max_norm: f32) {
+    let norm_sq: f32 = m.iter().flat_map(|r| r.iter()).map(|x| x * x).sum();
+    let norm = norm_sq.sqrt();
+    if norm > max_norm {
+        let scale = max_norm / norm;
+        for row in m.iter_mut() {
+            for v in row.iter_mut() {
+                *v *= scale;
+            }
+        }
+    }
+}
+
+/// L2 norm across a batch of matrices, treating all elements as a single
+/// vector. Used by `clip_global_norm` to scale the whole gradient uniformly.
+pub fn global_matrix_norm(matrices: &[&Vec<Vec<f32>>]) -> f32 {
+    let norm_sq: f32 = matrices
+        .iter()
+        .flat_map(|m| m.iter())
+        .map(|row| row.iter().map(|x| x * x).sum::<f32>())
+        .sum();
+    norm_sq.sqrt()
+}
+
+/// Multiply every element of each matrix by `scale`. Lets `clip_global_norm`
+/// (or anything else) rescale a batch of gradients uniformly.
+pub fn scale_matrices(matrices: &mut [&mut Vec<Vec<f32>>], scale: f32) {
+    for m in matrices {
+        for row in m.iter_mut() {
+            for v in row.iter_mut() {
+                *v *= scale;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,5 +196,44 @@ mod tests {
             let value = rng.uniform(0.1);
             assert!((-0.1..0.1).contains(&value));
         }
+    }
+
+    #[test]
+    fn test_clip_matrix_norm_scales_oversized() {
+        let mut m = vec![vec![3.0, 4.0]]; // norm = 5
+        clip_matrix_norm(&mut m, 1.0);
+        assert!((m[0][0] - 0.6).abs() < 1e-6);
+        assert!((m[0][1] - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_clip_matrix_norm_leaves_undersized_unchanged() {
+        let mut m = vec![vec![0.3, 0.4]]; // norm = 0.5
+        clip_matrix_norm(&mut m, 1.0);
+        assert_eq!(m, vec![vec![0.3, 0.4]]);
+    }
+
+    #[test]
+    fn test_clip_matrix_norm_zero_norm_unchanged() {
+        let mut m = vec![vec![0.0, 0.0]];
+        clip_matrix_norm(&mut m, 1.0);
+        assert_eq!(m, vec![vec![0.0, 0.0]]);
+    }
+
+    #[test]
+    fn test_global_matrix_norm_sums_across_matrices() {
+        let a = vec![vec![3.0, 4.0]]; // norm 5
+        let b = vec![vec![0.0, 0.0]]; // norm 0
+        let n = global_matrix_norm(&[&a, &b]);
+        assert!((n - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_scale_matrices_multiplies_every_element() {
+        let mut a = vec![vec![1.0, 2.0]];
+        let mut b = vec![vec![3.0]];
+        scale_matrices(&mut [&mut a, &mut b], 0.5);
+        assert_eq!(a, vec![vec![0.5, 1.0]]);
+        assert_eq!(b, vec![vec![1.5]]);
     }
 }

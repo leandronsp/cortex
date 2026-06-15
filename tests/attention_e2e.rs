@@ -2,7 +2,11 @@ use cortex::config::Config;
 use cortex::model::registry::create_model;
 use cortex::Cortex;
 
+// Slow E2E: trains 200 epochs of the full attention model on the corpus.
+// Run via `make test-slow` (release mode). Skipped from `make test-fast` and
+// default `cargo test` to keep the TDD loop under a few seconds.
 #[test]
+#[ignore]
 fn attention_trains_end_to_end_and_generates() {
     let config = Config::from_path("configs/attention.toml").expect("config");
     let model = create_model(&config.model).expect("model");
