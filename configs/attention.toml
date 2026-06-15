@@ -4,11 +4,12 @@ vocab_size = 257
 context_size = 8
 embedding_dim = 64
 hidden_dim = 256
+num_hidden_layers = 2
 
 [training]
 corpus = "configs/corpus.txt"
 epochs = 400
-learning_rate = 0.02
+learning_rate = 0.01
 
 [sampling]
 top_k = 5
