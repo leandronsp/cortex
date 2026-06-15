@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help test lint build
+.PHONY: help test test-slow lint build
 
 include mk/cortex.mk
 
@@ -12,5 +12,8 @@ build: ## Build library and binaries
 lint: ## Run clippy with warnings as errors
 	@cargo clippy -- -D warnings
 
-test: ## Run all tests
+test: ## Run fast tests (unit + fast integration; skips slow E2E)
 	@cargo test
+
+test-slow: ## Run the slow E2E training tests in release
+	@cargo test --release -- --ignored
