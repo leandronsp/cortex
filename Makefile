@@ -14,3 +14,6 @@ lint: ## Run clippy with warnings as errors
 
 test: ## Run all tests
 	@cargo test
+
+test-fast: ## Run fast unit tests only (skips E2E integration)
+	@cargo test --release --lib

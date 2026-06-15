@@ -25,11 +25,13 @@ pub fn create_model(section: &ModelSection) -> Result<Box<dyn Model>, String> {
             Ok(Box::new(mlp))
         }
         "attention" => {
+            let num_layers = section.num_hidden_layers.unwrap_or(1);
             let mut model = Attention::new(AttentionConfig {
                 vocab_size: section.vocab_size,
                 context_size: required(section.context_size, "context_size")?,
                 embedding_dim: required(section.embedding_dim, "embedding_dim")?,
                 ffn_hidden: required(section.hidden_dim, "hidden_dim")?,
+                num_blocks: num_layers,
             });
             model.init_weights(&mut calc::Rng::new(INIT_SEED));
             Ok(Box::new(model))
